@@ -25,10 +25,29 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon-32.png" />
-    <link rel="icon" type="image/svg+xml" href="./logo.svg" />
+    <!-- iOS launch images (iPhone 12/13/14 Pro Max: 428x926 @3x) -->
+    <link
+      rel="apple-touch-startup-image"
+      href="./splash/iphone-1284x2778-light.png"
+      media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)"
+    />
+    <link
+      rel="apple-touch-startup-image"
+      href="./splash/iphone-1284x2778-dark.png"
+      media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)"
+    />
+    <link rel="stylesheet" href="./boot.css" />
     <script src="./theme-init.js"></script>
   </head>
   <body>
+    <!-- Splash: painted from static HTML before the app bundle loads, faded out by main.tsx -->
+    <div id="boot" role="status" aria-label="Loading Covison">
+      <div class="boot-inner">
+        <img class="boot-logo" src="./logo-mark.png" alt="" width="96" height="96" />
+        <div class="boot-bar"></div>
+        <div class="boot-msg" id="boot-msg"></div>
+      </div>
+    </div>
     <div id="app"></div>
     <noscript>Covison Pocket needs JavaScript.</noscript>
     <script type="module" src="/src/main.tsx"></script>

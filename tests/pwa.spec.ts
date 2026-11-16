@@ -21,6 +21,8 @@ const STORES = [
   "deals",
   "tasks",
   "activities",
+  "ledger",
+  "payments",
 ];
 
 /** Read every data store straight from IndexedDB (independent of app code). */
@@ -82,7 +84,7 @@ test("security: strict CSP meta, no inline scripts, no CSP violations, no remote
   expect(html).toContain('http-equiv="Content-Security-Policy"');
   expect(html).toMatch(/script-src 'self';/);
   expect(html).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/); // every script is external
-  for (const tab of ["Contacts", "Pipeline", "Tasks", "More"]) {
+  for (const tab of ["Contacts", "Pipeline", "Money", "More"]) {
     await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: tab }).click();
     await page.waitForTimeout(450);
   }
@@ -148,7 +150,11 @@ test("export → erase → import round-trips with zero data loss, and stays XSS
     const stages = await all<{ id: string; pipelineId: string }>("stages");
     const evil = `<img src=x onerror="window.__xss=1"><script>window.__xss=2</script>`;
     const t = new Date().toISOString();
-    const tx = db.transaction(["contacts", "companies", "deals", "tasks", "activities", "tags", "contactTags"], "readwrite");
+    const tx = db.transaction(["contacts", "companies", "deals", "tasks", "activities", "tags", "contactTags", "ledger", "payments"], "readwrite");
+    for (let i = 0; i < 15; i++) {
+      tx.objectStore("ledger").put({ id: `l-${i}`, direction: i % 2 ? "out" : "in", kind: i % 3 ? "loan" : "credit", personName: `Person ${i} ${evil}`, phone: "0300 1112233", contactId: i < 5 ? `c-${i}` : undefined, amount: 1000 * (i + 1), currency: "PKR", date: "2026-10-01", dueDate: i % 4 ? "2026-12-01" : undefined, note: `Loan 💸 ${i}`, createdAt: t, updatedAt: t });
+      tx.objectStore("payments").put({ id: `p-${i}`, entryId: `l-${i}`, amount: 100 * i, date: "2026-10-15", createdAt: t });
+    }
     for (let i = 0; i < 60; i++) {
       const cid = `c-${i}`;
       tx.objectStore("companies").put({ id: `co-${i}`, name: `Firma ${i} 🚀 ${i % 7 === 0 ? evil : ""}`, website: i % 5 === 0 ? "javascript:alert(1)" : `https://f${i}.example`, createdAt: t, updatedAt: t });
@@ -264,4 +270,57 @@ test("import from existing CRM: web CSV exports map correctly", async ({ page })
   await expect(page.getByText(/Imported:/).last()).toBeVisible();
   const db2 = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
   expect(db2.contacts.filter((c) => c.email === "ada@engine.io").length).toBe(1);
+});
+
+test("launch splash fades into the app (no blank screen)", async ({ page }) => {
+  await page.goto("./");
+  // The splash is static HTML, visible before the bundle runs.
+  await expect(page.locator("#boot .boot-logo")).toHaveCount(1);
+  await expect(page.getByText("People owe you")).toBeVisible();
+  await expect(page.locator("#boot")).toHaveCount(0, { timeout: 4000 });
+});
+
+test("money: Home totals, WhatsApp links, and won-on-credit receivable", async ({ page }) => {
+  await page.goto("./#/settings");
+  await page.getByText("Erase all data", { exact: true }).click();
+  await page.getByRole("dialog").last().getByRole("button", { name: "Erase everything", exact: true }).click();
+  await addSampleData(page);
+  await page.goto("./#/");
+  // Sample: owed to me 250,000-100,000 + 50,000 = 200,000; I owe 38,000 + (100,000-40,000) = 98,000
+  await expect(page.locator(".money-card.in .mc-value")).toHaveText(/Rs\s?200,000/, { timeout: 4000 });
+  await expect(page.locator(".money-card.out .mc-value")).toHaveText(/Rs\s?98,000/, { timeout: 4000 });
+
+  // WhatsApp opens the chat directly with the number in international format
+  await page.goto("./#/contacts");
+  await page.getByText("Amara Okafor", { exact: true }).click();
+  await expect(page.locator("a.qa.wa")).toHaveAttribute("href", "whatsapp://send?phone=923001234510");
+
+  // Record a payment on a loan
+  await page.goto("./#/money");
+  await page.getByText("Bilal (cousin)").click();
+  await page.getByRole("button", { name: "Payment received" }).click();
+  const sheet = page.getByRole("dialog").last();
+  await sheet.getByLabel("Amount (Rs)").fill("20000");
+  await sheet.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Payment recorded")).toBeVisible();
+  await expect(page.locator(".hero .h-value")).toHaveText(/30,000/);
+
+  // New lead who pays on credit -> win the deal -> offered as a receivable
+  await page.goto("./#/pipeline");
+  await page.getByRole("button", { name: "New lead" }).click();
+  const lead = page.getByRole("dialog").last();
+  await lead.getByLabel("Name", { exact: true }).fill("Credit Kamran");
+  await lead.getByLabel("Phone").fill("0312 5550001");
+  await lead.getByLabel("Pays").selectOption("credit");
+  await lead.getByLabel("Value (Rs)").fill("75000");
+  await lead.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText(/Lead added to/)).toBeVisible();
+  await page.getByText("Credit Kamran").first().click();
+  await page.getByRole("button", { name: "Won" }).click();
+  await page.getByRole("dialog").last().getByRole("button", { name: "Add to receivables", exact: true }).click();
+  await expect(page.getByText("Added to People owe you")).toBeVisible();
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  const entry = db.ledger.find((e) => e.personName === "Credit Kamran")!;
+  expect(entry).toMatchObject({ direction: "in", kind: "credit", amount: 75000, currency: "PKR", phone: "0312 5550001" });
+  expect(entry.dealId).toBeTruthy();
 });

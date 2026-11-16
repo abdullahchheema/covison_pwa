@@ -7,6 +7,7 @@
 // in ANALYSIS.md section 6.
 import { csvToObjects } from "./csv";
 import {
+  DEFAULT_CURRENCY,
   db,
   type Activity,
   type Company,
@@ -390,7 +391,7 @@ export async function applyLegacyPlan(plan: LegacyPlan): Promise<LegacyResult> {
               stageId,
               pipelineId: str(get(r, "pipeline_id"), 64) ?? (await defaultPipelineId())!,
               value: numOr(get(r, "value")) ?? 0,
-              currency: str(get(r, "currency"), 8) ?? "USD",
+              currency: str(get(r, "currency"), 8) ?? DEFAULT_CURRENCY,
               contactId: str(get(r, "contact_id"), 64),
               companyId: str(get(r, "company_id"), 64),
               expectedCloseDate: dateOnly(get(r, "expected_close_date")),
@@ -534,7 +535,7 @@ export async function applyLegacyPlan(plan: LegacyPlan): Promise<LegacyResult> {
             stageId: stage.id,
             name,
             value: numOr(get(r, "value")) ?? 0,
-            currency: str(get(r, "currency"), 8) ?? "USD",
+            currency: str(get(r, "currency"), 8) ?? DEFAULT_CURRENCY,
             contactId: await contactIdFor(str(get(r, "contact"))),
             companyId: await companyIdFor(str(get(r, "company"))),
             createdAt: t,

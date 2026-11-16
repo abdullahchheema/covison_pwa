@@ -2,9 +2,12 @@
 // in the header (iOS pattern).
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
-import { db, type Activity, type ActivityType, type Company, type Contact, type Deal, type LeadField, type LeadType, type Stage, type Tag, type TagColor, type Task } from "../db/schema";
+import { DEFAULT_CURRENCY, db, type Activity, type LedgerEntry, type ActivityType, type Company, type Contact, type Deal, type LeadField, type LeadType, type Stage, type Tag, type TagColor, type Task } from "../db/schema";
 import {
   addNote,
+  addPayment,
+  saveLedgerEntry,
+  todayYmd,
   defaultPipelineId,
   logActivity,
   saveColumn,
@@ -73,6 +76,7 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
     jobTitle: c.jobTitle ?? "",
     companyId: c.companyId ?? "",
     status: c.status ?? "new",
+    paymentTerms: c.paymentTerms ?? "immediate",
     priority: c.priority ?? "",
     leadTypeId: c.leadTypeId ?? "",
     expectedRevenue: c.expectedRevenue?.toString() ?? "",
@@ -118,6 +122,7 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
         companyId: f.companyId || undefined,
         status: f.status as Contact["status"],
         priority: (f.priority || undefined) as Contact["priority"],
+        paymentTerms: f.paymentTerms as Contact["paymentTerms"],
         leadTypeId: f.leadTypeId || undefined,
         expectedRevenue: numOrUndef(f.expectedRevenue),
         expectedClose: f.expectedClose || undefined,
@@ -148,6 +153,7 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
       <Group label="Lead">
         <SelectField label="Status" value={f.status} placeholder={false} onChange={set("status")} options={CONTACT_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))} />
         <SelectField label="Priority" value={f.priority} onChange={set("priority")} options={CONTACT_PRIORITIES.map((s) => ({ value: s, label: PRIORITY_LABELS[s] }))} />
+        <SelectField label="Pays" value={f.paymentTerms} placeholder={false} onChange={set("paymentTerms")} options={[{ value: "immediate", label: "Immediately" }, { value: "credit", label: "On credit" }]} />
         <SelectField label="Lead type" value={f.leadTypeId} onChange={set("leadTypeId")} options={(leadTypes ?? []).map((x) => ({ value: x.id, label: x.name }))} />
         <TextField label="Revenue" value={f.expectedRevenue} onInput={set("expectedRevenue")} inputMode="decimal" placeholder="0" />
         <TextField label="Close date" value={f.expectedClose} onInput={set("expectedClose")} type="date" />
@@ -269,7 +275,7 @@ function DealForm({ bind, existing, defaults }: { bind: Binding; existing?: Deal
   const [f, setF] = useState({
     name: d.name ?? "",
     value: d.value?.toString() ?? "",
-    currency: d.currency ?? "USD",
+    currency: d.currency ?? "PKR",
     stageId: d.stageId ?? "",
     contactId: d.contactId ?? "",
     companyId: d.companyId ?? "",
@@ -663,6 +669,225 @@ function LeadTypeForm({ bind, existing }: { bind: Binding; existing?: LeadType }
       <button class="btn tinted block press" onClick={() => setFields((fs) => [...fs, { key: "", label: "", type: "text" }])}>
         <Icon name="plus" size={20} /> Add field
       </button>
+    </div>
+  );
+}
+
+// =================== Quick lead (contact + deal in one go) ===================
+/**
+ * The day-to-day flow: capture a lead with a phone number and drop it straight
+ * into a pipeline stage. Creates (or reuses) the contact and creates the deal.
+ */
+export function openLeadForm(defaults: { stageId?: string } = {}) {
+  openForm("New lead", (bind) => <LeadForm bind={bind} defaults={defaults} />);
+}
+
+function LeadForm({ bind, defaults }: { bind: Binding; defaults: { stageId?: string } }) {
+  const [mode, setMode] = useState<"new" | "existing">("new");
+  const [f, setF] = useState({
+    name: "",
+    phone: "",
+    company: "",
+    contactId: "",
+    dealName: "",
+    value: "",
+    stageId: defaults.stageId ?? "",
+    paymentTerms: "immediate",
+    note: "",
+  });
+  const set = (k: keyof typeof f) => (v: string) => setF((p) => ({ ...p, [k]: v }));
+  const stages = useLive(async () => {
+    const pid = await defaultPipelineId();
+    return pid ? db.stages.where("pipelineId").equals(pid).sortBy("position") : ([] as Stage[]);
+  }, []);
+  const contacts = useLive(() => db.contacts.orderBy("name").toArray(), []);
+  const stageId = f.stageId || stages?.[0]?.id || "";
+
+  bind.current = async () => {
+    if (!stageId) return fail("Add a pipeline stage first");
+    const stage = stages!.find((s) => s.id === stageId)!;
+    let contactId = f.contactId;
+    let contactName = "";
+    let companyId: string | undefined;
+    if (mode === "new") {
+      const name = optText(f.name);
+      if (!name) return fail("Name is required");
+      const companyName = optText(f.company);
+      if (companyName) {
+        const hit = await db.companies.filter((c) => c.name.trim().toLowerCase() === companyName.toLowerCase()).first();
+        companyId = hit?.id ?? (await saveCompany({ name: companyName }));
+      }
+      contactId = await saveContact({
+        name,
+        phone: optText(f.phone),
+        status: "new",
+        companyId,
+        paymentTerms: f.paymentTerms as Contact["paymentTerms"],
+        customFields: {},
+      });
+      contactName = name;
+    } else {
+      if (!contactId) return fail("Choose a contact");
+      const c = await db.contacts.get(contactId);
+      contactName = c?.name ?? "";
+      companyId = c?.companyId;
+    }
+    const dealId = await saveDeal({
+      pipelineId: stage.pipelineId,
+      stageId,
+      name: optText(f.dealName) ?? contactName,
+      value: numOrUndef(f.value) ?? 0,
+      currency: DEFAULT_CURRENCY,
+      contactId,
+      companyId,
+    });
+    const note = optText(f.note, MAX_LONG);
+    if (note) await addNote({ dealId }, note);
+    toast(`Lead added to ${stage.name}`, { icon: "sparkles" });
+  };
+
+  return (
+    <div class="form">
+      <Segmented
+        value={mode}
+        onChange={setMode}
+        options={[
+          { value: "new", label: "New person" },
+          { value: "existing", label: "Existing contact" },
+        ]}
+      />
+      {mode === "new" ? (
+        <Group footer="Enter the number as you'd dial it (e.g. 0300 1234567). WhatsApp opens with it directly.">
+          <TextField label="Name" value={f.name} onInput={set("name")} placeholder="Required" autoFocus />
+          <TextField label="Phone" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" placeholder="0300 1234567" />
+          <TextField label="Company" value={f.company} onInput={set("company")} />
+          <SelectField label="Pays" value={f.paymentTerms} placeholder={false} onChange={set("paymentTerms")} options={[{ value: "immediate", label: "Immediately" }, { value: "credit", label: "On credit" }]} />
+        </Group>
+      ) : (
+        <div class="group">
+          <SelectField label="Contact" value={f.contactId} onChange={set("contactId")} placeholder="Choose…" options={(contacts ?? []).map((x) => ({ value: x.id, label: x.name }))} />
+        </div>
+      )}
+      <Group label="Deal">
+        <SelectField label="Stage" value={stageId} placeholder={false} onChange={set("stageId")} options={(stages ?? []).map((s) => ({ value: s.id, label: s.name }))} />
+        <TextField label="Value (Rs)" value={f.value} onInput={set("value")} inputMode="numeric" placeholder="0" />
+        <TextField label="Deal name" value={f.dealName} onInput={set("dealName")} placeholder="Defaults to the name" />
+      </Group>
+      <Group>
+        <TextArea label="Note" value={f.note} onInput={set("note")} placeholder="What do they need?" />
+      </Group>
+    </div>
+  );
+}
+
+// =================== Money: ledger entry ===================
+export function openLedgerForm(existing?: LedgerEntry, defaults: Partial<LedgerEntry> = {}) {
+  openForm(existing ? "Edit entry" : "New money entry", (bind) => <LedgerForm bind={bind} existing={existing} defaults={defaults} />);
+}
+
+function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: LedgerEntry; defaults: Partial<LedgerEntry> }) {
+  const e = { ...defaults, ...existing };
+  const [f, setF] = useState({
+    direction: e.direction ?? "in",
+    kind: e.kind ?? "loan",
+    contactId: e.contactId ?? "",
+    personName: e.contactId ? "" : e.personName ?? "",
+    phone: e.contactId ? "" : e.phone ?? "",
+    amount: e.amount ? String(e.amount) : "",
+    date: e.date ?? todayYmd(),
+    dueDate: e.dueDate ?? "",
+    note: e.note ?? "",
+  });
+  const set = (k: keyof typeof f) => (v: string) => setF((p) => ({ ...p, [k]: v }));
+  const contacts = useLive(() => db.contacts.orderBy("name").toArray(), []);
+
+  bind.current = async () => {
+    const amount = numOrUndef(f.amount);
+    if (!amount || amount <= 0) return fail("Enter an amount");
+    let personName = optText(f.personName);
+    let phone = optText(f.phone);
+    if (f.contactId) {
+      const c = await db.contacts.get(f.contactId);
+      personName = c?.name;
+      phone = c?.phone;
+    }
+    if (!personName) return fail("Choose a contact or type a name");
+    await saveLedgerEntry({
+      id: existing?.id,
+      direction: f.direction as LedgerEntry["direction"],
+      kind: f.kind as LedgerEntry["kind"],
+      personName,
+      phone,
+      contactId: f.contactId || undefined,
+      dealId: e.dealId,
+      amount,
+      currency: e.currency ?? DEFAULT_CURRENCY,
+      date: f.date || todayYmd(),
+      dueDate: f.dueDate || undefined,
+      note: optText(f.note, MAX_LONG),
+      settledAt: existing?.settledAt,
+    });
+    toast(existing ? "Entry updated" : f.direction === "in" ? "Added to money owed to you" : "Added to money you owe", { icon: "wallet" });
+  };
+
+  return (
+    <div class="form">
+      <Segmented
+        value={f.direction}
+        onChange={set("direction")}
+        options={[
+          { value: "in", label: "They owe me" },
+          { value: "out", label: "I owe them" },
+        ]}
+      />
+      <Segmented
+        value={f.kind}
+        onChange={set("kind")}
+        options={[
+          { value: "loan", label: "Personal loan" },
+          { value: "credit", label: "Credit (business)" },
+        ]}
+      />
+      <Group label="Who" footer="Pick a contact, or just type a name for people who aren't in your CRM.">
+        <SelectField label="Contact" value={f.contactId} onChange={set("contactId")} placeholder="Not a contact" options={(contacts ?? []).map((x) => ({ value: x.id, label: x.name }))} />
+        {!f.contactId && <TextField label="Name" value={f.personName} onInput={set("personName")} placeholder="Required" />}
+        {!f.contactId && <TextField label="Phone" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" placeholder="For WhatsApp reminders" />}
+      </Group>
+      <Group label="Amount">
+        <TextField label="Amount (Rs)" value={f.amount} onInput={set("amount")} inputMode="decimal" placeholder="0" autoFocus={!existing && !defaults.amount} />
+        <TextField label="Date" value={f.date} onInput={set("date")} type="date" />
+        <TextField label="Due by" value={f.dueDate} onInput={set("dueDate")} type="date" />
+      </Group>
+      <Group>
+        <TextArea label="Note" value={f.note} onInput={set("note")} placeholder="What was it for?" />
+      </Group>
+    </div>
+  );
+}
+
+// =================== Money: payment ===================
+export function openPaymentForm(entry: LedgerEntry, remaining: number) {
+  openForm(entry.direction === "in" ? "Payment received" : "Payment made", (bind) => <PaymentForm bind={bind} entry={entry} remaining={remaining} />, "Save");
+}
+
+function PaymentForm({ bind, entry, remaining }: { bind: Binding; entry: LedgerEntry; remaining: number }) {
+  const [amount, setAmount] = useState(String(remaining));
+  const [date, setDate] = useState(todayYmd());
+  const [note, setNote] = useState("");
+  bind.current = async () => {
+    const a = numOrUndef(amount);
+    if (!a || a <= 0) return fail("Enter an amount");
+    if (a > remaining + 0.001) return fail(`That's more than the Rs ${remaining.toLocaleString()} left`);
+    await addPayment(entry.id, a, date || todayYmd(), optText(note, 500));
+    toast(a >= remaining ? "Fully settled 🎉" : "Payment recorded", { icon: "checkCircle" });
+  };
+  return (
+    <div class="form">
+      <Group footer={`Remaining: Rs ${remaining.toLocaleString()}. Partial payments are fine.`}>
+        <TextField label="Amount (Rs)" value={amount} onInput={setAmount} inputMode="decimal" autoFocus />
+        <TextField label="Date" value={date} onInput={setDate} type="date" />
+        <TextField label="Note" value={note} onInput={setNote} placeholder="e.g. cash, bank transfer" />
+      </Group>
     </div>
   );
 }

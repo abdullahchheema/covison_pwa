@@ -55,4 +55,4 @@ export const LEAD_FIELD_LABELS: Record<LeadFieldType, string> = {
   checkbox: "Yes / No",
 };
 
-export const CURRENCIES = ["USD", "EUR", "GBP", "PKR", "AED", "CAD", "AUD", "INR", "SAR"];
+export const CURRENCIES = ["PKR", "USD", "AED", "SAR", "GBP", "EUR", "CAD", "AUD"];

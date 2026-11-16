@@ -12,6 +12,7 @@ import { Screen } from "../ui/kit";
 import { BarList, Sparkline } from "../ui/charts";
 import { TaskRow } from "./shared";
 import { BackupReminder } from "./Settings";
+import { MoneySummary } from "./Ledger";
 
 async function loadDashboard() {
   const pipelineId = await defaultPipelineId();
@@ -31,7 +32,7 @@ async function loadDashboard() {
   // Dominant currency for display (deals in mixed currencies are summed as-is, like the web app).
   const cur = new Map<string, number>();
   for (const d of open) cur.set(d.currency, (cur.get(d.currency) ?? 0) + 1);
-  const currency = [...cur.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "USD";
+  const currency = [...cur.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "PKR";
 
   // 14 daily buckets; cumulative on top of the value that existed before the window.
   const DAYS = 14;
@@ -127,7 +128,9 @@ export function Dashboard() {
           </div>
         ) : (
           <>
-            <button class="hero press-soft rise" style={{ "--i": 0, width: "100%", textAlign: "left", display: "block" } as never} onClick={() => switchTab("/pipeline")}>
+            <MoneySummary compact />
+
+            <button class="hero press-soft rise mt12" style={{ "--i": 3, width: "100%", textAlign: "left", display: "block" } as never} onClick={() => switchTab("/pipeline")}>
               <div class="row between">
                 <span class="h-label">Open pipeline</span>
                 <Icon name="trend" size={20} />
@@ -149,7 +152,7 @@ export function Dashboard() {
                 value={d.openTasks}
                 label="Open tasks"
                 hint={d.overdue ? `${d.overdue} overdue` : undefined}
-                onClick={() => switchTab("/tasks")}
+                onClick={() => navigate("/tasks")}
               />
             </div>
 
@@ -195,7 +198,7 @@ export function Dashboard() {
             <section class="section">
               <div class="section-head">
                 <h2>Up next</h2>
-                <button class="link" onClick={() => switchTab("/tasks")}>
+                <button class="link" onClick={() => navigate("/tasks")}>
                   All tasks
                 </button>
               </div>

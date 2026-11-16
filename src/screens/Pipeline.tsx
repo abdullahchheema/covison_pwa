@@ -3,16 +3,17 @@
 // dock, plus a "Move to…" sheet as the accessible fallback.
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { db, type Deal, type Stage } from "../db/schema";
-import { defaultPipelineId, deleteDeal, moveDeal } from "../db/repo";
+import { defaultPipelineId, deleteDeal, moveDeal, saveLedgerEntry, todayYmd } from "../db/repo";
 import { exportCsv } from "../db/csvExport";
 import { useLive } from "../lib/hooks";
 import { money, shortDate } from "../lib/format";
 import { back, navigate } from "../lib/router";
 import { Icon } from "../ui/icons";
 import { Avatar, Badge, Empty, Group, Row, Screen, SearchField, useDebounced } from "../ui/kit";
-import { actionSheet, toast } from "../ui/overlay";
+import { actionSheet, confirmSheet, toast } from "../ui/overlay";
+import { openWhatsApp, waHref } from "../lib/whatsapp";
 import { Draggable, DropDock } from "../ui/drag";
-import { openDealForm } from "./forms";
+import { openDealForm, openLeadForm, openLedgerForm } from "./forms";
 import { TaskSection, Timeline, confirmDelete } from "./shared";
 
 async function loadBoard() {
@@ -27,6 +28,7 @@ async function loadBoard() {
     stages,
     deals: deals.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     contact: new Map(contacts.map((c) => [c.id, c.name])),
+    phone: new Map(contacts.filter((c) => c.phone).map((c) => [c.id, c.phone!])),
     company: new Map(companies.map((c) => [c.id, c.name])),
   };
 }
@@ -35,14 +37,49 @@ function stageTone(s?: Stage) {
   return s?.isWon ? "success" : s?.isLost ? "neutral" : "brand";
 }
 
+/**
+ * Move a deal and react to it. When a deal is won and the client pays on
+ * credit, offer to put the amount into "People owe you" (once per deal).
+ */
+export async function moveDealTo(dealId: string, stageId: string) {
+  await moveDeal(dealId, stageId);
+  const [deal, stage] = await Promise.all([db.deals.get(dealId), db.stages.get(stageId)]);
+  toast(stage?.isWon ? "Deal won, congratulations!" : `Moved to ${stage?.name}`, { icon: stage?.isWon ? "sparkles" : "arrowRight" });
+  if (!deal || !stage?.isWon || !deal.contactId) return;
+  const contact = await db.contacts.get(deal.contactId);
+  if (contact?.paymentTerms !== "credit") return;
+  if ((await db.ledger.where("dealId").equals(deal.id).count()) > 0) return;
+  const ok = await confirmSheet({
+    title: `Add ${money(deal.value, deal.currency)} to money owed to you?`,
+    message: `${contact.name} pays on credit. You can record payments as they come in.`,
+    confirm: "Add to receivables",
+  });
+  if (!ok) return;
+  const due = new Date(Date.now() + 30 * 86400000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  await saveLedgerEntry({
+    direction: "in",
+    kind: "credit",
+    personName: contact.name,
+    phone: contact.phone,
+    contactId: contact.id,
+    dealId: deal.id,
+    amount: deal.value,
+    currency: deal.currency,
+    date: todayYmd(),
+    dueDate: `${due.getFullYear()}-${p(due.getMonth() + 1)}-${p(due.getDate())}`,
+    note: deal.name,
+  });
+  toast("Added to People owe you", { icon: "wallet" });
+}
+
 export function moveSheet(deal: Deal, stages: Stage[]) {
   actionSheet(
     stages.map((s) => ({
       label: s.id === deal.stageId ? `${s.name} (current)` : s.name,
       run: async () => {
         if (s.id === deal.stageId) return;
-        await moveDeal(deal.id, s.id);
-        toast(`Moved to ${s.name}`, { icon: s.isWon ? "sparkles" : "arrowRight" });
+        await moveDealTo(deal.id, s.id);
       },
     })),
     `Move “${deal.name}” to…`,
@@ -106,7 +143,7 @@ export function Pipeline() {
   return (
     <Screen
       title="Pipeline"
-      subtitle={board ? `${openTotal.n} open · ${money(openTotal.v, "USD")}` : " "}
+      subtitle={board ? `${openTotal.n} open · ${money(openTotal.v)}` : " "}
       right={
         <>
           <button
@@ -122,7 +159,7 @@ export function Pipeline() {
           >
             <Icon name="more" size={24} />
           </button>
-          <button class="nav-btn" aria-label="New deal" onClick={() => openDealForm(undefined, board?.stages[page] ? { stageId: board.stages[page].id } : {})}>
+          <button class="nav-btn" aria-label="New lead" onClick={() => openLeadForm(board?.stages[page] ? { stageId: board.stages[page].id } : {})}>
             <Icon name="plus" size={26} />
           </button>
         </>
@@ -161,20 +198,18 @@ export function Pipeline() {
                       </Badge>
                       {s.probability !== undefined && <span class="t-footnote c3">{s.probability}%</span>}
                     </div>
-                    <span class="t-subhead c2 num">{money(total, "USD", true)}</span>
+                    <span class="t-subhead c2 num">{money(total, undefined, true)}</span>
                   </div>
                   <div class="pane-body">
                     {ds.length === 0 ? (
-                      <button class="t-subhead c3 press" style="padding:28px 8px;text-align:center" onClick={() => openDealForm(undefined, { stageId: s.id })}>
-                        No deals here. Tap to add one, or long-press a deal in another stage to move it.
+                      <button class="t-subhead c3 press" style="padding:28px 8px;text-align:center" onClick={() => openLeadForm({ stageId: s.id })}>
+                        No leads here. Tap to add one, or long-press a deal in another stage to move it.
                       </button>
                     ) : (
                       ds.map((d, i) => (
                         <div key={d.id} class="rise" style={{ "--i": i } as never}>
                           <Draggable itemId={d.id} zones={zones} currentZone={d.stageId} onTap={() => navigate(`/deals/${d.id}`)} onDrop={async (z) => {
-                            await moveDeal(d.id, z);
-                            const st = board.stages.find((x) => x.id === z);
-                            toast(`Moved to ${st?.name}`, { icon: st?.isWon ? "sparkles" : "arrowRight" });
+                            await moveDealTo(d.id, z);
                           }}>
                             <div class="row between" style="align-items:flex-start">
                               <span class="t-headline clamp2" style="flex:1">{d.name}</span>
@@ -191,7 +226,25 @@ export function Pipeline() {
                                 <Icon name="more" size={20} />
                               </button>
                             </div>
-                            <div class="t-title3 t-metric mt8">{money(d.value, d.currency)}</div>
+                            <div class="row between mt8">
+                              <div class="t-title3 t-metric">{money(d.value, d.currency)}</div>
+                              {d.contactId && waHref(board.phone.get(d.contactId)) && (
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  class="wa-chip press"
+                                  aria-label={`WhatsApp ${board.contact.get(d.contactId) ?? ""}`}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openWhatsApp(board.phone.get(d.contactId!));
+                                  }}
+                                >
+                                  <Icon name="whatsapp" size={16} />
+                                  WhatsApp
+                                </span>
+                              )}
+                            </div>
                             <div class="row gap8 mt8 t-footnote c2">
                               {d.contactId && board.contact.get(d.contactId) && (
                                 <span class="row gap4 truncate">
@@ -244,7 +297,8 @@ export function DealDetail({ id }: { id: string }) {
       d.contactId ? db.contacts.get(d.contactId) : undefined,
       d.companyId ? db.companies.get(d.companyId) : undefined,
     ]);
-    return { d, stages, contact, company };
+    const receivable = await db.ledger.where("dealId").equals(d.id).first();
+    return { d, stages, contact, company, receivable };
   }, [id]);
 
   if (data === undefined) return <Screen title="" backLabel="Pipeline" large={false}><div /></Screen>;
@@ -254,7 +308,7 @@ export function DealDetail({ id }: { id: string }) {
         <Empty icon="dollar" title="Deal not found" />
       </Screen>
     );
-  const { d, stages, contact, company } = data;
+  const { d, stages, contact, company, receivable } = data;
   const stage = stages.find((s) => s.id === d.stageId);
   const idx = stages.findIndex((s) => s.id === d.stageId);
   const openStages = stages.filter((s) => !s.isWon && !s.isLost);
@@ -304,6 +358,13 @@ export function DealDetail({ id }: { id: string }) {
           </div>
         </div>
 
+        {contact && waHref(contact.phone) && (
+          <a class="btn wa block press mt12" href={waHref(contact.phone)}>
+            <Icon name="whatsapp" size={20} />
+            WhatsApp {contact.name.split(" ")[0]}
+          </a>
+        )}
+
         {stage && !stage.isWon && !stage.isLost && (won || lost) && (
           <div class="row gap8 mt12">
             {won && (
@@ -311,8 +372,7 @@ export function DealDetail({ id }: { id: string }) {
                 class="btn block press"
                 style="background:var(--success-soft);color:var(--success)"
                 onClick={async () => {
-                  await moveDeal(d.id, won.id);
-                  toast("Deal won, congratulations!", { icon: "sparkles" });
+                  await moveDealTo(d.id, won.id);
                 }}
               >
                 <Icon name="check" size={20} /> Won
@@ -322,8 +382,7 @@ export function DealDetail({ id }: { id: string }) {
               <button
                 class="btn plain block press"
                 onClick={async () => {
-                  await moveDeal(d.id, lost.id);
-                  toast("Marked as lost");
+                  await moveDealTo(d.id, lost.id);
                 }}
               >
                 <Icon name="x" size={20} /> Lost
@@ -334,7 +393,38 @@ export function DealDetail({ id }: { id: string }) {
 
         <Group class="section">
           <Row title={stage?.name ?? "—"} sub="stage" onClick={() => moveSheet(d, stages)} />
-          {contact && <Row title={contact.name} sub="contact" lead={<Avatar name={contact.name} />} onClick={() => navigate(`/contacts/${contact.id}`)} />}
+          {contact && (
+            <Row
+              title={contact.name}
+              sub={contact.paymentTerms === "credit" ? "contact · pays on credit" : contact.paymentTerms === "immediate" ? "contact · pays immediately" : "contact"}
+              lead={<Avatar name={contact.name} />}
+              onClick={() => navigate(`/contacts/${contact.id}`)}
+            />
+          )}
+          {receivable ? (
+            <Row title={receivable.settledAt ? "Paid in full" : "On credit · track payments"} sub="money" lead={<span class="tile green"><Icon name="wallet" size={16} /></span>} onClick={() => navigate(`/money/${receivable.id}`)} />
+          ) : (
+            stage?.isWon && (
+              <Row
+                title="Add to money owed to you"
+                sub="if this was sold on credit"
+                lead={<span class="tile green"><Icon name="wallet" size={16} /></span>}
+                onClick={() =>
+                  openLedgerForm(undefined, {
+                    direction: "in",
+                    kind: "credit",
+                    contactId: contact?.id,
+                    personName: contact?.name ?? d.name,
+                    phone: contact?.phone,
+                    dealId: d.id,
+                    amount: d.value,
+                    currency: d.currency,
+                    note: d.name,
+                  })
+                }
+              />
+            )
+          )}
           {company && <Row title={company.name} sub="company" lead={<Avatar name={company.name} square />} onClick={() => navigate(`/companies/${company.id}`)} />}
           {d.expectedCloseDate && <Row title={shortDate(d.expectedCloseDate)} sub="expected close" chevron={false} />}
           <Row title={shortDate(d.createdAt)} sub="created" chevron={false} />

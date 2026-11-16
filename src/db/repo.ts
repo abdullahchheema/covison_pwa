@@ -11,6 +11,8 @@ import {
   type DataTableName,
   type Deal,
   type LeadType,
+  type LedgerEntry,
+  type Payment,
   type Project,
   type ProjectColumn,
   type ProjectTodo,
@@ -133,18 +135,21 @@ export async function setContactTags(contactId: string, tagIds: string[]): Promi
 }
 
 export async function deleteContact(id: string): Promise<Snapshot> {
-  return db.transaction("rw", [db.contacts, db.contactTags, db.deals, db.tasks, db.activities], async () => {
+  return db.transaction("rw", [db.contacts, db.contactTags, db.deals, db.tasks, db.activities, db.ledger], async () => {
     const contact = await db.contacts.get(id);
     const contactTags = await db.contactTags.where("contactId").equals(id).toArray();
     const deals = await db.deals.where("contactId").equals(id).toArray();
     const tasks = await db.tasks.where("contactId").equals(id).toArray();
     const activities = await db.activities.where("contactId").equals(id).toArray();
+    const ledger = await db.ledger.where("contactId").equals(id).toArray();
     await db.contactTags.where("contactId").equals(id).delete();
     await db.deals.where("contactId").equals(id).modify((d) => void delete d.contactId);
     await db.tasks.where("contactId").equals(id).modify((x) => void delete x.contactId);
     await db.activities.where("contactId").equals(id).delete();
+    // Money owed survives the contact: keep the entry, keep the name/phone, drop the link.
+    await db.ledger.where("contactId").equals(id).modify((e) => void delete e.contactId);
     await db.contacts.delete(id);
-    return { contacts: contact ? [contact] : [], contactTags, deals, tasks, activities };
+    return { contacts: contact ? [contact] : [], contactTags, deals, tasks, activities, ledger };
   });
 }
 
@@ -220,14 +225,16 @@ export async function moveDeal(dealId: string, stageId: string): Promise<void> {
 }
 
 export async function deleteDeal(id: string): Promise<Snapshot> {
-  return db.transaction("rw", [db.deals, db.tasks, db.activities], async () => {
+  return db.transaction("rw", [db.deals, db.tasks, db.activities, db.ledger], async () => {
     const deal = await db.deals.get(id);
     const tasks = await db.tasks.where("dealId").equals(id).toArray();
     const activities = await db.activities.where("dealId").equals(id).toArray();
+    const ledger = await db.ledger.where("dealId").equals(id).toArray();
     await db.tasks.where("dealId").equals(id).modify((x) => void delete x.dealId);
     await db.activities.where("dealId").equals(id).delete();
+    await db.ledger.where("dealId").equals(id).modify((e) => void delete e.dealId);
     await db.deals.delete(id);
-    return { deals: deal ? [deal] : [], tasks, activities };
+    return { deals: deal ? [deal] : [], tasks, activities, ledger };
   });
 }
 
@@ -400,6 +407,117 @@ export async function deleteTodo(id: string): Promise<Snapshot> {
   const todo = await db.projectTodos.get(id);
   await db.projectTodos.delete(id);
   return { projectTodos: todo ? [todo] : [] };
+}
+
+// ---------- money ledger ----------
+export const todayYmd = (): string => {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+export interface EntryWithBalance {
+  entry: LedgerEntry;
+  paid: number;
+  balance: number;
+  payments: Payment[];
+  overdue: boolean;
+}
+
+export function withBalance(entry: LedgerEntry, payments: Payment[]): EntryWithBalance {
+  const mine = payments.filter((p) => p.entryId === entry.id).sort((a, b) => b.date.localeCompare(a.date));
+  const paid = mine.reduce((s, p) => s + p.amount, 0);
+  const balance = Math.max(0, Math.round((entry.amount - paid) * 100) / 100);
+  return {
+    entry,
+    paid,
+    balance,
+    payments: mine,
+    overdue: !entry.settledAt && balance > 0 && !!entry.dueDate && entry.dueDate < todayYmd(),
+  };
+}
+
+/** Totals for the Home cards: what people owe me, and what I owe. Open entries only. */
+export async function ledgerTotals(): Promise<{ receivable: number; payable: number; inPeople: number; outPeople: number; overdueIn: number }> {
+  const [entries, payments] = await Promise.all([db.ledger.toArray(), db.payments.toArray()]);
+  let receivable = 0;
+  let payable = 0;
+  let overdueIn = 0;
+  const inP = new Set<string>();
+  const outP = new Set<string>();
+  for (const e of entries) {
+    if (e.settledAt) continue;
+    const b = withBalance(e, payments);
+    if (b.balance <= 0) continue;
+    const who = e.contactId ?? e.personName.trim().toLowerCase();
+    if (e.direction === "in") {
+      receivable += b.balance;
+      inP.add(who);
+      if (b.overdue) overdueIn += b.balance;
+    } else {
+      payable += b.balance;
+      outP.add(who);
+    }
+  }
+  return { receivable, payable, inPeople: inP.size, outPeople: outP.size, overdueIn };
+}
+
+export async function saveLedgerEntry(input: Input<LedgerEntry>): Promise<string> {
+  const t = now();
+  if (input.id) {
+    await db.ledger.update(input.id, { ...input, updatedAt: t });
+    await syncSettled(input.id);
+    return input.id;
+  }
+  const id = uid();
+  await db.ledger.add({ ...input, id, createdAt: t, updatedAt: t } as LedgerEntry);
+  return id;
+}
+
+/** Settled exactly when fully paid. */
+async function syncSettled(entryId: string) {
+  const e = await db.ledger.get(entryId);
+  if (!e) return;
+  const payments = await db.payments.where("entryId").equals(entryId).toArray();
+  const { balance } = withBalance(e, payments);
+  if (balance <= 0 && !e.settledAt) await db.ledger.update(entryId, { settledAt: now(), updatedAt: now() });
+  if (balance > 0 && e.settledAt) await db.ledger.update(entryId, { settledAt: undefined, updatedAt: now() });
+}
+
+export async function addPayment(entryId: string, amount: number, date: string, note?: string): Promise<void> {
+  await db.transaction("rw", [db.ledger, db.payments], async () => {
+    await db.payments.add({ id: uid(), entryId, amount, date, note, createdAt: now() });
+    await syncSettled(entryId);
+  });
+}
+
+/** Records the remaining balance as a final payment so the history stays complete. */
+export async function settleEntry(entryId: string): Promise<void> {
+  const e = await db.ledger.get(entryId);
+  if (!e) return;
+  const { balance } = withBalance(e, await db.payments.where("entryId").equals(entryId).toArray());
+  if (balance > 0) await addPayment(entryId, balance, todayYmd(), "Settled in full");
+  else await syncSettled(entryId);
+}
+
+export async function deletePayment(id: string): Promise<Snapshot> {
+  const p = await db.payments.get(id);
+  if (!p) return {};
+  await db.transaction("rw", [db.ledger, db.payments], async () => {
+    await db.payments.delete(id);
+    await syncSettled(p.entryId);
+  });
+  return { payments: [p] };
+}
+
+export async function deleteLedgerEntry(id: string): Promise<Snapshot> {
+  return db.transaction("rw", [db.ledger, db.payments], async () => {
+    const e = await db.ledger.get(id);
+    const payments = await db.payments.where("entryId").equals(id).toArray();
+    await db.payments.where("entryId").equals(id).delete();
+    await db.ledger.delete(id);
+    return { ledger: e ? [e] : [], payments };
+  });
 }
 
 // ---------- meta ----------

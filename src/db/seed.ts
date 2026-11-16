@@ -1,4 +1,4 @@
-import { db, type Stage } from "./schema";
+import { db, type LedgerEntry, type Stage } from "./schema";
 import { getMeta, now, setMeta, uid } from "./repo";
 
 /**
@@ -83,8 +83,9 @@ export async function loadSampleData(): Promise<void> {
     status,
     priority: (["low", "medium", "high", "veryHigh"] as const)[i % 4],
     email: `${name.split(" ")[0].toLowerCase()}@${companies[ci].domain}`,
-    phone: `+1 555 01${String(10 + i)}`,
+    phone: `0300 12345${String(10 + i)}`,
     companyId: companies[ci].id,
+    paymentTerms: (i % 3 === 0 ? "credit" : "immediate") as "credit" | "immediate",
     customFields: {},
     createdAt: iso(-40 + i * 3),
     updatedAt: iso(-5 + i),
@@ -105,13 +106,13 @@ export async function loadSampleData(): Promise<void> {
   ]);
 
   const dealDefs: [string, number, number, number, number][] = [
-    ["Northwind annual licence", 24000, 2, 0, -12],
-    ["Bluepeak rebrand", 8500, 1, 2, -9],
-    ["Atlas fleet tracking", 41000, 3, 3, -7],
-    ["Lumen pilot", 12000, 4, 4, -20],
-    ["Cedar POS rollout", 6400, 0, 5, -3],
-    ["Northwind add-on seats", 3200, 1, 1, -1],
-    ["Bluepeak retainer", 4800, 5, 6, -25],
+    ["Northwind annual licence", 650000, 2, 0, -12],
+    ["Bluepeak rebrand", 240000, 1, 2, -9],
+    ["Atlas fleet tracking", 1150000, 3, 3, -7],
+    ["Lumen pilot", 320000, 4, 4, -20],
+    ["Cedar POS rollout", 180000, 0, 5, -3],
+    ["Northwind add-on seats", 90000, 1, 1, -1],
+    ["Bluepeak retainer", 135000, 5, 6, -25],
   ];
   await db.deals.bulkAdd(
     dealDefs.map(([name, value, si, ci, created]) => ({
@@ -120,7 +121,7 @@ export async function loadSampleData(): Promise<void> {
       stageId: stages[Math.min(si, stages.length - 1)].id,
       name,
       value,
-      currency: "USD",
+      currency: "PKR",
       contactId: contacts[ci].id,
       companyId: contacts[ci].companyId,
       createdAt: iso(created),
@@ -193,4 +194,18 @@ export async function loadSampleData(): Promise<void> {
       updatedAt: t,
     })),
   );
+
+  // Money: a credit client, a supplier on credit, and personal loans both ways.
+  const ymd = (offsetDays: number) => iso(offsetDays).slice(0, 10);
+  const ledger = [
+    { direction: "in", kind: "credit", personName: contacts[0].name, phone: contacts[0].phone, contactId: contacts[0].id, amount: 250000, date: ymd(-20), dueDate: ymd(10), note: "Annual licence, 30 days credit" },
+    { direction: "in", kind: "loan", personName: "Bilal (cousin)", phone: "0321 7654321", amount: 50000, date: ymd(-45), dueDate: ymd(-5), note: "For bike repair" },
+    { direction: "out", kind: "credit", personName: "Hassan Printers", phone: "0333 1112223", amount: 38000, date: ymd(-8), dueDate: ymd(7), note: "Brochures on credit" },
+    { direction: "out", kind: "loan", personName: "Ali Raza", phone: "0345 9988776", amount: 100000, date: ymd(-60), note: "Personal loan" },
+  ].map((e) => ({ ...e, id: uid(), currency: "PKR", createdAt: t, updatedAt: t })) as LedgerEntry[];
+  await db.ledger.bulkAdd(ledger);
+  await db.payments.bulkAdd([
+    { id: uid(), entryId: ledger[0].id, amount: 100000, date: ymd(-5), note: "First instalment", createdAt: t },
+    { id: uid(), entryId: ledger[3].id, amount: 40000, date: ymd(-20), createdAt: t },
+  ]);
 }

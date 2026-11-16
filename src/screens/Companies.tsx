@@ -87,7 +87,7 @@ export function CompaniesList() {
                   lead={<Avatar name={c.name} square />}
                   title={c.name}
                   sub={[c.industry, `${data!.people.get(c.id) ?? 0} people`].filter(Boolean).join(" · ")}
-                  value={data!.value.get(c.id) ? money(data!.value.get(c.id), "USD", true) : undefined}
+                  value={data!.value.get(c.id) ? money(data!.value.get(c.id), undefined, true) : undefined}
                 />
               </SwipeRow>
             ))}

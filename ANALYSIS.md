@@ -209,3 +209,47 @@ Every value is sanitised and length-capped. A preview with counts is shown befor
   Guidance came from the ui-ux-pro-max skill's local style and UX data. Its AI logo generator was not used, because it needs a third-party API key and would send data off the device.
 - **Single user:** no owner fields. Deletes are hard deletes with Undo.
 - **No device permissions are requested.** Phone, text and mail actions are plain `tel:`, `sms:` and `mailto:` links.
+
+## 8. Additions after the first release (Nov 2026)
+
+These features are new in the PWA. They didn't exist in the web CRM.
+
+### Real Covison logo
+- All app icons and the in-app logo now come from `web/public/logo-mark.png`.
+- The mark sits on the same ink background (`#120f1a`) that `web/src/app/apple-icon.tsx` uses.
+
+### Smooth launch
+- iOS launch images for the iPhone 12/13/14 Pro Max, in light and dark.
+- A static HTML splash showing the logo and a progress bar. It paints before any JavaScript runs.
+- Startup opens the database and seeds it before the first frame, then fades the splash into the app (at least 450 ms).
+- The service worker registers after the first frame, so it doesn't slow startup.
+- If the database is slow to open, the splash says so.
+
+### WhatsApp
+- Links use the `whatsapp://send?phone=<international number>` deep link, which opens the WhatsApp app straight into the chat.
+- Local numbers are converted to international form, e.g. `0300 1234567` → `923001234567`. The country code defaults to 92 and can be changed in Settings.
+- WhatsApp shows up in these places:
+  - Contact list: a button on each row, plus a swipe action
+  - Contact page: a quick-action button
+  - Pipeline: a button on every deal card, at every stage
+  - Deal page: a WhatsApp button
+  - Money entries: a reminder message, already written for you
+
+### Quick lead
+- **New lead** (from the + button, or the Pipeline +) creates the contact and the deal in a chosen stage in one step.
+- It asks for name, phone, company, payment terms, value and a note.
+
+### Money (new tab; Tasks moved under More)
+- New tables: `ledger` and `payments` (Dexie schema version 2, backup `schemaVersion` 2). Backups from version 1 still restore.
+- `contacts.paymentTerms` records how a client pays: `immediate` or `credit`.
+- When a deal is won for a client who pays on credit, the app offers to add the deal value to "People owe you", due in 30 days.
+- Manual entries cover both directions ("They owe me" / "I owe them") and two kinds:
+  - **Credit:** a sale or purchase on credit.
+  - **Personal loan:** money lent to or borrowed from someone.
+- The person can be a contact or just a typed-in name and phone.
+- Partial payments, "Settle all", overdue flags and a payment history are included.
+- The top of Home shows the open totals for **People owe you** and **You owe**.
+
+### Currency
+- PKR is the default everywhere, shown as "Rs 83,100".
+- Deals keep their own currency field, so older non-PKR deals display in their original currency.

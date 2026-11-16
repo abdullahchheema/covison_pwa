@@ -15,9 +15,10 @@ import { TagsScreen } from "./screens/Tags";
 import { LeadTypesScreen } from "./screens/LeadTypes";
 import { SearchScreen } from "./screens/Search";
 import { SettingsScreen } from "./screens/Settings";
+import { LedgerDetail, MoneyScreen } from "./screens/Ledger";
 import { StagesScreen } from "./screens/Stages";
 import { NotFound } from "./screens/NotFound";
-import { openCompanyForm, openContactForm, openDealForm, openNoteForm, openTaskForm } from "./screens/forms";
+import { openCompanyForm, openContactForm, openDealForm, openLeadForm, openLedgerForm, openNoteForm, openTaskForm } from "./screens/forms";
 
 const ROUTES: [string, (p: Record<string, string>) => JSX.Element][] = [
   ["/", () => <Dashboard />],
@@ -32,6 +33,8 @@ const ROUTES: [string, (p: Record<string, string>) => JSX.Element][] = [
   ["/tasks/:id", (p) => <TaskDetail id={p.id} />],
   ["/projects", () => <ProjectsList />],
   ["/projects/:id", (p) => <ProjectBoard id={p.id} />],
+  ["/money", () => <MoneyScreen />],
+  ["/money/:id", (p) => <LedgerDetail id={p.id} />],
   ["/more", () => <More />],
   ["/reports", () => <Reports />],
   ["/tags", () => <TagsScreen />],
@@ -97,7 +100,7 @@ const TABS: { path: string; label: string; icon: IconName }[] = [
   { path: "/", label: "Home", icon: "home" },
   { path: "/contacts", label: "Contacts", icon: "users" },
   { path: "/pipeline", label: "Pipeline", icon: "pipeline" },
-  { path: "/tasks", label: "Tasks", icon: "tasks" },
+  { path: "/money", label: "Money", icon: "wallet" },
   { path: "/more", label: "More", icon: "grid" },
 ];
 
@@ -125,10 +128,12 @@ function TabBar() {
 
 function Fab() {
   const route = useRoute();
-  const show = ["/", "/contacts", "/pipeline", "/tasks"].includes(route.path);
+  const show = ["/", "/contacts", "/pipeline", "/money", "/tasks"].includes(route.path);
   const open = () =>
     actionSheet(
       [
+        { label: "New lead", icon: "sparkles", run: () => openLeadForm() },
+        { label: "Money entry (credit / loan)", icon: "wallet", run: () => openLedgerForm() },
         { label: "New contact", icon: "user", run: () => openContactForm() },
         { label: "New deal", icon: "dollar", run: () => openDealForm() },
         { label: "New task", icon: "tasks", run: () => openTaskForm() },

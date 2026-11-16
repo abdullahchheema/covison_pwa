@@ -95,6 +95,19 @@ const SPEC: Record<DataTableName, FieldSpec[]> = {
   deals: [S("id", true), S("pipelineId", true), S("stageId", true), S("name", true), N("value", true), S("currency", true)],
   tasks: [S("id", true), S("title", true), S("status", true), S("dueAt"), S("contactId"), S("dealId")],
   activities: [S("id", true), S("type", true), S("occurredAt", true), S("body")],
+  ledger: [
+    S("id", true),
+    S("direction", true),
+    S("kind", true),
+    S("personName", true),
+    N("amount", true),
+    S("currency", true),
+    S("date", true),
+    S("contactId"),
+    S("dealId"),
+    S("settledAt"),
+  ],
+  payments: [S("id", true), S("entryId", true), N("amount", true), S("date", true)],
 };
 
 function kindOf(v: unknown): Kind | "null" | "other" {
@@ -155,7 +168,7 @@ export function validateBackup(raw: unknown): ValidationResult {
   // Referential checks for required links.
   if (!errors.length) {
     const ref = (table: DataTableName, field: string, target: DataTableName, required: boolean) => {
-      (data[table] as Record<string, unknown>[]).forEach((r, i) => {
+      ((data[table] ?? []) as Record<string, unknown>[]).forEach((r, i) => {
         const v = r[field];
         if (v === undefined || v === null) {
           if (required) errors.push(`${table}[${i}] has no ${field}.`);
@@ -175,6 +188,13 @@ export function validateBackup(raw: unknown): ValidationResult {
     ref("tasks", "dealId", "deals", false);
     ref("activities", "contactId", "contacts", false);
     ref("activities", "dealId", "deals", false);
+    ref("ledger", "contactId", "contacts", false);
+    ref("ledger", "dealId", "deals", false);
+    ref("payments", "entryId", "ledger", true);
+    (data.ledger as Record<string, unknown>[] | undefined)?.forEach((r, i) => {
+      if (r.direction !== "in" && r.direction !== "out") errors.push(`ledger[${i}].direction must be "in" or "out".`);
+      if (r.kind !== "credit" && r.kind !== "loan") errors.push(`ledger[${i}].kind must be "credit" or "loan".`);
+    });
   }
 
   if (errors.length) return { ok: false, errors: errors.slice(0, 50) };

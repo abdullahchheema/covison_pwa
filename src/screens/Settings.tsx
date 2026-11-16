@@ -15,6 +15,7 @@ import { Icon } from "../ui/icons";
 import { Group, Row, Screen, Segmented, TextField } from "../ui/kit";
 import { actionSheet, confirmSheet, openSheet, toast } from "../ui/overlay";
 import { pickFile } from "./CsvImport";
+import { getCountryCode, setCountryCode } from "../lib/whatsapp";
 
 const DAY = 86400000;
 
@@ -29,6 +30,8 @@ const TABLE_LABELS: Record<string, string> = {
   tags: "tags",
   leadTypes: "lead types",
   stages: "stages",
+  ledger: "money entries",
+  payments: "payments",
 };
 
 function useBackupStatus() {
@@ -199,6 +202,27 @@ function LegacyConfirm({ plan, close }: { plan: LegacyPlan; close: () => void })
   );
 }
 
+function CountryCodeSheet({ close }: { close: () => void }) {
+  const [v, setV] = useState(getCountryCode());
+  return (
+    <div class="form">
+      <Group footer="Used to turn local numbers like 0300 1234567 into WhatsApp format (92 300 1234567). Numbers saved with + already keep their own code.">
+        <TextField label="Code" value={v} onInput={setV} inputMode="numeric" maxLength={4} />
+      </Group>
+      <button
+        class="btn primary block press"
+        onClick={() => {
+          setCountryCode(v);
+          close();
+          toast("Saved");
+        }}
+      >
+        Save
+      </button>
+    </div>
+  );
+}
+
 function NameSheet({ initial, close }: { initial: string; close: () => void }) {
   const [v, setV] = useState(initial);
   return (
@@ -249,6 +273,16 @@ export function SettingsScreen() {
             lead={<span class="tile violet"><Icon name="user" size={16} /></span>}
             title="Your name"
             value={name || "Not set"}
+          />
+        </Group>
+
+        <Group label="Money & WhatsApp">
+          <Row lead={<span class="tile green"><Icon name="wallet" size={16} /></span>} title="Currency" value="PKR (Rs)" chevron={false} />
+          <Row
+            onClick={() => openSheet((close) => <CountryCodeSheet close={close} />, { title: "WhatsApp country code" })}
+            lead={<span class="tile green"><Icon name="whatsapp" size={16} /></span>}
+            title="WhatsApp country code"
+            value={`+${getCountryCode()}`}
           />
         </Group>
 

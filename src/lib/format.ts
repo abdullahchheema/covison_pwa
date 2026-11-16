@@ -2,17 +2,23 @@
 
 const moneyCache = new Map<string, Intl.NumberFormat>();
 
-export function money(value: number | undefined, currency = "USD", compact = false): string {
+/**
+ * Currency formatting. Default is Pakistani rupees, shown the local way
+ * ("Rs 83,100"). Whole rupees only; other currencies keep up to 2 decimals.
+ */
+export function money(value: number | undefined, currency = "PKR", compact = false): string {
   const v = value ?? 0;
-  const key = `${currency}|${compact}`;
+  const whole = currency === "PKR" || v % 1 === 0;
+  const key = `${currency}|${compact}|${whole}`;
   let fmt = moneyCache.get(key);
   if (!fmt) {
     try {
-      fmt = new Intl.NumberFormat(undefined, {
+      fmt = new Intl.NumberFormat(currency === "PKR" ? "en-PK" : undefined, {
         style: "currency",
         currency,
+        currencyDisplay: currency === "PKR" ? "narrowSymbol" : "symbol",
         notation: compact ? "compact" : "standard",
-        maximumFractionDigits: compact ? 1 : v % 1 === 0 ? 0 : 2,
+        maximumFractionDigits: compact ? 1 : whole ? 0 : 2,
       });
     } catch {
       fmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
@@ -86,7 +92,12 @@ export function greeting(date = new Date()): string {
 }
 
 export function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
+  // Letters only, so "Bilal (cousin)" → "BC", not "B(".
+  const parts = name
+    .trim()
+    .split(/\s+/)
+    .map((p) => p.replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter(Boolean);
   if (!parts.length) return "?";
   return ((parts[0][0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] ?? "" : "")).toUpperCase();
 }

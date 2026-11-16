@@ -5,7 +5,8 @@ import { Icon, type IconName } from "../ui/icons";
 import { Group, Row, Screen } from "../ui/kit";
 import { BackupReminder } from "./Settings";
 
-const ITEMS: { to: string; label: string; icon: IconName; tile: string; count?: "companies" | "projects" | "tags" | "leadTypes" }[] = [
+const ITEMS: { to: string; label: string; icon: IconName; tile: string; count?: "companies" | "projects" | "tags" | "leadTypes" | "tasks" }[] = [
+  { to: "/tasks", label: "Tasks", icon: "tasks", tile: "green", count: "tasks" },
   { to: "/companies", label: "Companies", icon: "building", tile: "blue", count: "companies" },
   { to: "/projects", label: "Projects", icon: "folder", tile: "orange", count: "projects" },
   { to: "/reports", label: "Reports", icon: "chart", tile: "violet" },
@@ -14,11 +15,12 @@ const ITEMS: { to: string; label: string; icon: IconName; tile: string; count?: 
 const ORGANISE: typeof ITEMS = [
   { to: "/tags", label: "Tags", icon: "tag", tile: "pink", count: "tags" },
   { to: "/lead-types", label: "Lead types", icon: "layers", tile: "indigo", count: "leadTypes" },
-  { to: "/pipeline/stages", label: "Pipeline stages", icon: "columns", tile: "green" },
+  { to: "/pipeline/stages", label: "Pipeline stages", icon: "columns", tile: "gold" },
 ];
 
 export function More() {
   const counts = useLive(async () => ({
+    tasks: await db.tasks.where("status").equals("open").count(),
     companies: await db.companies.count(),
     projects: await db.projects.count(),
     tags: await db.tags.count(),
@@ -49,7 +51,7 @@ export function More() {
           {row({ to: "/settings", label: "Settings", icon: "settings", tile: "gray" })}
         </Group>
         <div class="col center gap8" style="padding:24px 0 8px">
-          <img src="./logo.svg" alt="" width="44" height="44" style="filter:drop-shadow(0 8px 18px rgb(109 74 255 / .35))" />
+          <img src="./logo-mark.png" alt="" width="48" height="48" style="filter:drop-shadow(0 8px 18px rgb(109 74 255 / .35))" />
           <p class="t-footnote c3">Covison Pocket · private &amp; offline</p>
         </div>
       </div>

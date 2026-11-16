@@ -1393,3 +1393,127 @@
   animation: splash-pop 900ms var(--ease-spring) both;
   filter: drop-shadow(0 12px 28px rgb(109 74 255 / 0.45));
 }
+
+/* ============ Money ============ */
+.money-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.money-card {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 14px 13px;
+  border-radius: var(--r-2xl);
+  text-align: left;
+  color: #fff;
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.3);
+}
+.money-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.2), rgb(255 255 255 / 0) 50%);
+  z-index: -1;
+}
+.money-card.in {
+  background: radial-gradient(120% 120% at 100% 100%, rgb(110 231 183 / 0.55), transparent 60%), linear-gradient(135deg, #0b7a52, #149a68 55%, #2bbf86);
+  box-shadow: 0 14px 30px -12px rgb(20 154 104 / 0.6), inset 0 1px 0 rgb(255 255 255 / 0.3);
+}
+.money-card.out {
+  background: radial-gradient(120% 120% at 100% 100%, rgb(253 164 175 / 0.5), transparent 60%), linear-gradient(135deg, #a8243a, #d13a46 55%, #ee5d6a);
+  box-shadow: 0 14px 30px -12px rgb(209 58 70 / 0.6), inset 0 1px 0 rgb(255 255 255 / 0.3);
+}
+.money-card .mc-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.92;
+}
+.money-card .mc-ico {
+  width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  background: rgb(255 255 255 / 0.22);
+}
+.money-card .mc-value {
+  font-size: 22px;
+  line-height: 1.15;
+  margin-top: 6px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.money-card .mc-sub {
+  font-size: 12.5px;
+  opacity: 0.85;
+}
+.hero.hero-in {
+  background: radial-gradient(120% 140% at 100% 100%, rgb(110 231 183 / 0.5), transparent 55%), linear-gradient(135deg, #0b7a52, #149a68 55%, #2bbf86);
+  box-shadow: 0 18px 40px -12px rgb(20 154 104 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.35);
+}
+.hero.hero-out {
+  background: radial-gradient(120% 140% at 100% 100%, rgb(253 164 175 / 0.5), transparent 55%), linear-gradient(135deg, #a8243a, #d13a46 55%, #ee5d6a);
+  box-shadow: 0 18px 40px -12px rgb(209 58 70 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.35);
+}
+.mini-track {
+  width: 56px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+  display: block;
+}
+.mini-track > span {
+  display: block;
+  height: 100%;
+  background: var(--success);
+  border-radius: 2px;
+}
+
+/* WhatsApp */
+.btn.wa {
+  background: #25d366;
+  color: #fff;
+  box-shadow: 0 6px 16px rgb(37 211 102 / 0.35), inset 0 1px 0 rgb(255 255 255 / 0.3);
+}
+.qa.wa {
+  color: #1faa52;
+}
+.wa-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 11px 0 9px;
+  border-radius: 15px;
+  background: rgb(37 211 102 / 0.14);
+  color: #1a9e4b;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+:root[data-theme="dark"] .wa-chip,
+:root[data-theme="dark"] .qa.wa {
+  color: #4ade80;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .wa-chip,
+  :root:not([data-theme="light"]) .qa.wa {
+    color: #4ade80;
+  }
+}
+.swipe-act.success.wa,
+.swipe-act.wa {
+  background: #25d366;
+}

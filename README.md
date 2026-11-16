@@ -60,7 +60,7 @@ The build runs four steps:
 
 `dist/` is a fully static site. Every URL in it is relative, so it works at a domain root or under a subpath such as `/covison/`.
 
-App icons are pre-rendered into `public/icons/` from `public/logo.svg`. After editing the logo, re-render them:
+App icons and iOS launch images are pre-rendered into `public/icons/` and `public/splash/` from the real Covison mark, `public/logo-mark.png` (copied from `web/public/logo-mark.png`). After changing the logo, re-render them:
 
 ```bash
 npm run icons
@@ -83,6 +83,8 @@ The first command is a one-time download. The tests run headless Chromium with a
 | Offline | Goes offline, reloads, deep-links, and creates a contact while offline. |
 | Backup round-trip | Seeds 200+ records with unicode and hostile `<script>`/`<img onerror>` strings, then exports through the UI, erases, rejects a corrupted backup, and restores. Every table must be identical before and after. It also checks that no injected script ran and that `javascript:` URLs never reach an `href`. |
 | Legacy import | Imports web-CRM CSV exports and checks the field mapping, tag creation, stage matching, ticket skipping, and de-duplication. |
+| Launch | The static splash is shown first, then fades into the app. |
+| Money | Checks the Home totals for "People owe you" and "You owe", the WhatsApp deep link format, recording a partial payment, and the won-on-credit receivable for a new lead. |
 
 ## Deploy for free
 
@@ -148,7 +150,7 @@ Then in the app, go to **Settings → Import from existing CRM** and select all 
 ```
 covison_pwa/
   index.html             CSP + iOS meta tags, no inline script
-  public/                manifest, logo.svg, icons, theme-init.js
+  public/                manifest, logo-mark.png, icons, splash, boot.css, theme-init.js
   scripts/               icon renderer, SW plugin + template, safety check
   src/
     db/                  Dexie schema, repo (all writes), seed, backup, CSV, legacy import

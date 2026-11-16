@@ -74,6 +74,8 @@ export function TasksList() {
     <Screen
       title="Tasks"
       subtitle={data ? `${openCount} open` : " "}
+      backLabel="More"
+      backTo="/more"
       right={
         <>
           <button class="nav-btn" aria-label="Options" onClick={() => actionSheet([{ label: "Export to CSV", icon: "share", run: () => void exportCsv("tasks") }])}>

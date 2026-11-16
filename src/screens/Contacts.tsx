@@ -13,6 +13,8 @@ import { actionSheet, openSheet } from "../ui/overlay";
 import { openContactForm, openDealForm } from "./forms";
 import { Timeline, TaskSection, confirmDelete } from "./shared";
 import { openCsvImport } from "./CsvImport";
+import { ContactMoney } from "./Ledger";
+import { openWhatsApp, waHref } from "../lib/whatsapp";
 
 interface Filters {
   status: string;
@@ -188,7 +190,8 @@ function ContactRow({ c, company, i }: { c: Contact; company?: string; i: number
     <SwipeRow
       i={i}
       actions={[
-        ...(telHref(c.phone) ? [{ label: "Call", icon: "phone" as const, tone: "success" as const, run: () => (location.href = telHref(c.phone)!) }] : []),
+        ...(waHref(c.phone) ? [{ label: "WhatsApp", icon: "whatsapp" as const, tone: "success" as const, run: () => void openWhatsApp(c.phone) }] : []),
+        ...(telHref(c.phone) ? [{ label: "Call", icon: "phone" as const, tone: "brand" as const, run: () => (location.href = telHref(c.phone)!) }] : []),
         {
           label: "Delete",
           icon: "trash",
@@ -202,7 +205,26 @@ function ContactRow({ c, company, i }: { c: Contact; company?: string; i: number
         lead={<Avatar name={c.name} />}
         title={c.name}
         sub={[c.jobTitle, company].filter(Boolean).join(" · ") || c.email || " "}
-        trail={<Badge tone={STATUS_TONE[c.status]}>{STATUS_LABELS[c.status]}</Badge>}
+        trail={
+          <span class="row gap8" style="flex-shrink:0">
+            <Badge tone={STATUS_TONE[c.status]}>{STATUS_LABELS[c.status]}</Badge>
+            {waHref(c.phone) && (
+              <span
+                role="button"
+                tabIndex={0}
+                class="wa-chip press"
+                aria-label={`WhatsApp ${c.name}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openWhatsApp(c.phone);
+                }}
+                style="padding:0 8px;height:30px;width:30px;justify-content:center"
+              >
+                <Icon name="whatsapp" size={17} />
+              </span>
+            )}
+          </span>
+        }
         chevron={false}
       />
     </SwipeRow>
@@ -340,6 +362,7 @@ export function ContactDetail({ id }: { id: string }) {
           </Badge>
           {c.priority && <Badge tone={PRIORITY_TONE[c.priority]}>{PRIORITY_LABELS[c.priority]} priority</Badge>}
           {leadType && <Badge tone="info">{leadType.name}</Badge>}
+          {c.paymentTerms === "credit" ? <Badge tone="warning">Pays on credit</Badge> : c.paymentTerms === "immediate" ? <Badge tone="success">Pays immediately</Badge> : null}
         </div>
       </div>
 
@@ -349,6 +372,10 @@ export function ContactDetail({ id }: { id: string }) {
             <Icon name="phone" size={22} />
             call
           </a>
+          <a class="qa wa press" href={waHref(c.phone)} aria-disabled={!waHref(c.phone)}>
+            <Icon name="whatsapp" size={22} />
+            WhatsApp
+          </a>
           <a class="qa press" href={smsHref(c.phone)} aria-disabled={!smsHref(c.phone)}>
             <Icon name="message" size={22} />
             text
@@ -356,10 +383,6 @@ export function ContactDetail({ id }: { id: string }) {
           <a class="qa press" href={mailHref(c.email)} aria-disabled={!mailHref(c.email)}>
             <Icon name="mail" size={22} />
             mail
-          </a>
-          <a class="qa press" href={web ?? linkedin} target="_blank" rel="noopener noreferrer" aria-disabled={!(web ?? linkedin)}>
-            <Icon name="globe" size={22} />
-            web
           </a>
         </div>
 
@@ -434,6 +457,8 @@ export function ContactDetail({ id }: { id: string }) {
             <p class="t-subhead c3" style="padding:0 4px">No deals.</p>
           )}
         </section>
+
+        <ContactMoney contactId={c.id} name={c.name} phone={c.phone} />
 
         <TaskSection parent={{ contactId: c.id }} />
 

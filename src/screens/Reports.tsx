@@ -68,8 +68,8 @@ export function Reports() {
           <>
             <div class="metrics">
               <Stat i={0} label="Win rate" value={r.winRate} format={(n) => `${Math.round(n)}%`} />
-              <Stat i={1} label="Won value" value={r.wonValue} format={(n) => money(n, "USD", true)} />
-              <Stat i={2} label="Avg. deal" value={r.avgDeal} format={(n) => money(n, "USD", true)} />
+              <Stat i={1} label="Won value" value={r.wonValue} format={(n) => money(n, undefined, true)} />
+              <Stat i={2} label="Avg. deal" value={r.avgDeal} format={(n) => money(n, undefined, true)} />
             </div>
 
             <section class="section">

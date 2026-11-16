@@ -6,8 +6,11 @@ export type TaskPriority = "low" | "medium" | "high";
 export type ActivityType = "note" | "call" | "meeting" | "field_change";
 export type TagColor = "neutral" | "brand" | "success" | "warning" | "danger" | "info";
 export type LeadFieldType = "text" | "number" | "date" | "select" | "checkbox";
+export type PaymentTerms = "immediate" | "credit";
 
 export interface Contact {
+  /** How this client pays: up front, or on credit (creates a receivable when a deal is won). */
+  paymentTerms?: PaymentTerms;
   id: string;
   name: string;
   email?: string;
@@ -166,6 +169,41 @@ export interface ProjectTodo {
   updatedAt: string;
 }
 
+/**
+ * Money owed in either direction.
+ * - direction "in": they owe me (receivable), "out": I owe them (payable)
+ * - kind "credit": a sale/purchase on credit, "loan": a personal loan
+ * The person is either a linked contact or a free-text name (+ phone),
+ * so personal loans with friends don't need a CRM contact.
+ */
+export interface LedgerEntry {
+  id: string;
+  direction: "in" | "out";
+  kind: "credit" | "loan";
+  personName: string;
+  phone?: string;
+  contactId?: string;
+  dealId?: string;
+  amount: number;
+  currency: string;
+  date: string; // YYYY-MM-DD
+  dueDate?: string; // YYYY-MM-DD
+  note?: string;
+  settledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A (partial) repayment against a ledger entry. */
+export interface Payment {
+  id: string;
+  entryId: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  note?: string;
+  createdAt: string;
+}
+
 export interface Meta {
   key: string;
   value: unknown;
@@ -185,6 +223,8 @@ export class CovisonDB extends Dexie {
   projects!: Table<Project, string>;
   projectColumns!: Table<ProjectColumn, string>;
   projectTodos!: Table<ProjectTodo, string>;
+  ledger!: Table<LedgerEntry, string>;
+  payments!: Table<Payment, string>;
   meta!: Table<Meta, string>;
 
   constructor(name = "covison-pocket") {
@@ -204,6 +244,11 @@ export class CovisonDB extends Dexie {
       projectColumns: "id, projectId, position",
       projectTodos: "id, projectId, columnId, position",
       meta: "key",
+    });
+    // v2: money ledger (credit clients + personal loans). Additive, no data migration needed.
+    this.version(2).stores({
+      ledger: "id, direction, contactId, dealId, settledAt, date",
+      payments: "id, entryId, date",
     });
   }
 }
@@ -225,7 +270,11 @@ export const DATA_TABLES = [
   "deals",
   "tasks",
   "activities",
+  "ledger",
+  "payments",
 ] as const;
 export type DataTableName = (typeof DATA_TABLES)[number];
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+
+export const DEFAULT_CURRENCY = "PKR";
