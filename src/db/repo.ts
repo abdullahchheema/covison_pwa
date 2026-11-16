@@ -14,6 +14,7 @@ import {
   type LedgerEntry,
   type Payment,
   type Project,
+  type Transaction,
   type ProjectColumn,
   type ProjectTodo,
   type Stage,
@@ -35,6 +36,9 @@ export async function restoreSnapshot(snap: Snapshot): Promise<void> {
       if (rows?.length) await db.table(n).bulkPut(rows);
     }
   });
+  // An undone payment deletion must re-open / re-settle its ledger entry.
+  const entryIds = new Set(((snap.payments ?? []) as Payment[]).map((p) => p.entryId));
+  for (const id of entryIds) await syncSettled(id);
 }
 
 type Input<T> = Omit<T, "id" | "createdAt" | "updatedAt"> & { id?: string };
@@ -135,7 +139,9 @@ export async function setContactTags(contactId: string, tagIds: string[]): Promi
 }
 
 export async function deleteContact(id: string): Promise<Snapshot> {
-  return db.transaction("rw", [db.contacts, db.contactTags, db.deals, db.tasks, db.activities, db.ledger], async () => {
+  return db.transaction("rw", [db.contacts, db.contactTags, db.deals, db.tasks, db.activities, db.ledger, db.transactions], async () => {
+    const transactions = await db.transactions.where("contactId").equals(id).toArray();
+    await db.transactions.where("contactId").equals(id).modify((t) => void delete t.contactId);
     const contact = await db.contacts.get(id);
     const contactTags = await db.contactTags.where("contactId").equals(id).toArray();
     const deals = await db.deals.where("contactId").equals(id).toArray();
@@ -149,7 +155,7 @@ export async function deleteContact(id: string): Promise<Snapshot> {
     // Money owed survives the contact: keep the entry, keep the name/phone, drop the link.
     await db.ledger.where("contactId").equals(id).modify((e) => void delete e.contactId);
     await db.contacts.delete(id);
-    return { contacts: contact ? [contact] : [], contactTags, deals, tasks, activities, ledger };
+    return { contacts: contact ? [contact] : [], contactTags, deals, tasks, activities, ledger, transactions };
   });
 }
 
@@ -225,7 +231,10 @@ export async function moveDeal(dealId: string, stageId: string): Promise<void> {
 }
 
 export async function deleteDeal(id: string): Promise<Snapshot> {
-  return db.transaction("rw", [db.deals, db.tasks, db.activities, db.ledger], async () => {
+  return db.transaction("rw", [db.deals, db.tasks, db.activities, db.ledger, db.transactions], async () => {
+    const transactions = await db.transactions.where("dealId").equals(id).toArray();
+    // Money received stays in cash flow even if the deal is deleted.
+    await db.transactions.where("dealId").equals(id).modify((t) => void delete t.dealId);
     const deal = await db.deals.get(id);
     const tasks = await db.tasks.where("dealId").equals(id).toArray();
     const activities = await db.activities.where("dealId").equals(id).toArray();
@@ -234,7 +243,7 @@ export async function deleteDeal(id: string): Promise<Snapshot> {
     await db.activities.where("dealId").equals(id).delete();
     await db.ledger.where("dealId").equals(id).modify((e) => void delete e.dealId);
     await db.deals.delete(id);
-    return { deals: deal ? [deal] : [], tasks, activities, ledger };
+    return { deals: deal ? [deal] : [], tasks, activities, ledger, transactions };
   });
 }
 
@@ -484,9 +493,32 @@ async function syncSettled(entryId: string) {
   if (balance > 0 && e.settledAt) await db.ledger.update(entryId, { settledAt: undefined, updatedAt: now() });
 }
 
-export async function addPayment(entryId: string, amount: number, date: string, note?: string): Promise<void> {
-  await db.transaction("rw", [db.ledger, db.payments], async () => {
-    await db.payments.add({ id: uid(), entryId, amount, date, note, createdAt: now() });
+export async function addPayment(entryId: string, amount: number, date: string, note?: string, method?: string): Promise<void> {
+  await db.transaction("rw", [db.ledger, db.payments, db.transactions], async () => {
+    const entry = await db.ledger.get(entryId);
+    const paymentId = uid();
+    await db.payments.add({ id: paymentId, entryId, amount, date, note, createdAt: now() });
+    // Credit (business) payments are real income/expense, so they also land in
+    // the cash-flow book. Personal loans are not income or expenses: no transaction.
+    if (entry?.kind === "credit") {
+      const t = now();
+      await db.transactions.add({
+        id: uid(),
+        type: entry.direction === "in" ? "income" : "expense",
+        scope: "business",
+        amount,
+        currency: entry.currency,
+        date,
+        category: entry.direction === "in" ? (entry.dealId ? "Client payment" : "Sales") : "Supplies",
+        method,
+        note: note ?? entry.note,
+        contactId: entry.contactId,
+        dealId: entry.dealId,
+        ledgerPaymentId: paymentId,
+        createdAt: t,
+        updatedAt: t,
+      });
+    }
     await syncSettled(entryId);
   });
 }
@@ -503,21 +535,132 @@ export async function settleEntry(entryId: string): Promise<void> {
 export async function deletePayment(id: string): Promise<Snapshot> {
   const p = await db.payments.get(id);
   if (!p) return {};
-  await db.transaction("rw", [db.ledger, db.payments], async () => {
+  const transactions = await db.transactions.where("ledgerPaymentId").equals(id).toArray();
+  await db.transaction("rw", [db.ledger, db.payments, db.transactions], async () => {
+    await db.transactions.where("ledgerPaymentId").equals(id).delete();
     await db.payments.delete(id);
     await syncSettled(p.entryId);
   });
-  return { payments: [p] };
+  return { payments: [p], transactions };
 }
 
 export async function deleteLedgerEntry(id: string): Promise<Snapshot> {
-  return db.transaction("rw", [db.ledger, db.payments], async () => {
+  return db.transaction("rw", [db.ledger, db.payments, db.transactions], async () => {
     const e = await db.ledger.get(id);
     const payments = await db.payments.where("entryId").equals(id).toArray();
+    const pids = payments.map((p) => p.id);
+    const transactions = pids.length ? await db.transactions.where("ledgerPaymentId").anyOf(pids).toArray() : [];
+    // The money really changed hands, so its income/expense stays in cash flow;
+    // only the link to the deleted entry is dropped.
+    if (pids.length) await db.transactions.where("ledgerPaymentId").anyOf(pids).modify((t) => void delete t.ledgerPaymentId);
     await db.payments.where("entryId").equals(id).delete();
     await db.ledger.delete(id);
-    return { ledger: e ? [e] : [], payments };
+    return { ledger: e ? [e] : [], payments, transactions };
   });
+}
+
+// ---------- cash flow ----------
+export const PAYMENT_METHODS = ["Cash", "Bank transfer", "JazzCash", "Easypaisa", "Card", "Cheque"];
+
+export const CATEGORIES: Record<"business" | "personal", Record<"income" | "expense", string[]>> = {
+  business: {
+    income: ["Client payment", "Sales", "Services", "Commission", "Other income"],
+    expense: ["Supplies", "Salaries", "Rent", "Utilities", "Transport", "Marketing", "Software", "Equipment", "Food", "Taxes & fees", "Other"],
+  },
+  personal: {
+    income: ["Salary", "Profit", "Gift", "Refund", "Other income"],
+    expense: ["Food", "Groceries", "Fuel", "Bills", "Rent", "Shopping", "Health", "Education", "Family", "Charity", "Entertainment", "Travel", "Other"],
+  },
+};
+
+type TxInput = Omit<Transaction, "id" | "createdAt" | "updatedAt"> & { id?: string };
+
+export async function saveTransaction(input: TxInput): Promise<string> {
+  const t = now();
+  if (input.id) {
+    await db.transactions.update(input.id, { ...input, updatedAt: t });
+    // Keep a linked credit payment in step with an edited transaction.
+    const tx = await db.transactions.get(input.id);
+    if (tx?.ledgerPaymentId) {
+      const pay = await db.payments.get(tx.ledgerPaymentId);
+      if (pay) {
+        await db.payments.update(pay.id, { amount: input.amount, date: input.date });
+        await syncSettled(pay.entryId);
+      }
+    }
+    return input.id;
+  }
+  const id = uid();
+  await db.transactions.add({ ...input, id, createdAt: t, updatedAt: t } as Transaction);
+  return id;
+}
+
+export async function deleteTransaction(id: string): Promise<Snapshot> {
+  const tx = await db.transactions.get(id);
+  if (!tx) return {};
+  // Deleting the income of a credit payment also removes that payment.
+  if (tx.ledgerPaymentId) {
+    const snap = await deletePayment(tx.ledgerPaymentId);
+    return snap;
+  }
+  await db.transactions.delete(id);
+  return { transactions: [tx] };
+}
+
+/**
+ * Record money received on a deal (advance, delivery, extra work...).
+ * If the deal has an open credit receivable, the payment goes against it
+ * first; anything beyond its balance is recorded as extra income. Either way
+ * exactly one income line per payment ends up in cash flow.
+ */
+export async function recordDealPayment(dealId: string, amount: number, date: string, label: string, method?: string): Promise<void> {
+  const deal = await db.deals.get(dealId);
+  if (!deal) return;
+  const entries = await db.ledger.where("dealId").equals(dealId).filter((e) => e.direction === "in" && !e.settledAt).toArray();
+  let rest = amount;
+  for (const e of entries) {
+    if (rest <= 0) break;
+    const { balance } = withBalance(e, await db.payments.where("entryId").equals(e.id).toArray());
+    const apply = Math.min(balance, rest);
+    if (apply > 0) {
+      await addPayment(e.id, apply, date, label, method);
+      rest -= apply;
+    }
+  }
+  if (rest > 0) {
+    await saveTransaction({
+      type: "income",
+      scope: "business",
+      amount: rest,
+      currency: deal.currency,
+      date,
+      category: "Client payment",
+      method,
+      note: label,
+      contactId: deal.contactId,
+      dealId,
+    });
+  }
+}
+
+/** Money received on a deal so far, from the cash-flow book. */
+export async function dealReceived(dealId: string): Promise<{ received: number; items: Transaction[] }> {
+  const items = (await db.transactions.where("dealId").equals(dealId).toArray()).filter((t) => t.type === "income").sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+  return { received: items.reduce((s, t) => s + t.amount, 0), items };
+}
+
+export function monthRange(year: number, month: number): [string, string] {
+  const p = (n: number) => String(n).padStart(2, "0");
+  const last = new Date(year, month + 1, 0).getDate();
+  return [`${year}-${p(month + 1)}-01`, `${year}-${p(month + 1)}-${p(last)}`];
+}
+
+export async function monthTotals(year: number, month: number, scope?: "business" | "personal") {
+  const [from, to] = monthRange(year, month);
+  const txs = (await db.transactions.where("date").between(from, to, true, true).toArray()).filter((t) => !scope || t.scope === scope);
+  const income = txs.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
+  const expense = txs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+  return { income, expense, net: income - expense, txs };
 }
 
 // ---------- meta ----------

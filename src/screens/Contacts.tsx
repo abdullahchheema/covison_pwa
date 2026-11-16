@@ -10,7 +10,7 @@ import { back, navigate } from "../lib/router";
 import { Icon } from "../ui/icons";
 import { Avatar, Badge, Empty, Group, Row, Screen, SearchField, SkeletonList, SwipeRow, useDebounced } from "../ui/kit";
 import { actionSheet, openSheet } from "../ui/overlay";
-import { openContactForm, openDealForm } from "./forms";
+import { importVcfContacts, openContactForm, openDealForm } from "./forms";
 import { Timeline, TaskSection, confirmDelete } from "./shared";
 import { openCsvImport } from "./CsvImport";
 import { ContactMoney } from "./Ledger";
@@ -107,6 +107,7 @@ export function ContactsList() {
             aria-label="Options"
             onClick={() =>
               actionSheet([
+                { label: "Import iPhone contacts (.vcf)", icon: "users", run: () => void importVcfContacts() },
                 { label: "Import from CSV", icon: "upload", run: () => void openCsvImport("contacts") },
                 { label: "Export to CSV", icon: "share", run: () => void exportCsv("contacts") },
                 { label: "Companies", icon: "building", run: () => navigate("/companies") },

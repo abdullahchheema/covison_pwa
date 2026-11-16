@@ -26,6 +26,7 @@ export function tabOf(path: string): string {
   if (path === "/") return "/";
   const first = `/${path.split("/")[1]}`;
   if (TAB_ROOTS.includes(first)) return first;
+  if (first === "/deals") return "/pipeline"; // a deal page belongs to the Pipeline tab
   return "/more"; // companies, projects, reports, settings... live under More
 }
 

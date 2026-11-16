@@ -11,8 +11,9 @@ import { telHref } from "../lib/sanitize";
 import { Icon } from "../ui/icons";
 import { Avatar, Badge, Empty, Group, Row, Screen, Segmented, SkeletonList, SwipeRow } from "../ui/kit";
 import { actionSheet, confirmSheet, toast, undoToast } from "../ui/overlay";
-import { openLedgerForm, openPaymentForm } from "./forms";
+import { openLedgerForm, openPaymentForm, openTransactionForm } from "./forms";
 import { confirmDelete } from "./shared";
+import { CashFlowView } from "./CashFlow";
 
 type View = "in" | "out" | "settled";
 
@@ -46,6 +47,7 @@ export function MoneySummary({ compact }: { compact?: boolean }) {
   const go = (v: View) => {
     try {
       localStorage.setItem("covison.ledger.view", JSON.stringify(v));
+      localStorage.setItem("covison.money.tab", JSON.stringify("owed"));
     } catch {
       /* ignore */
     }
@@ -134,6 +136,45 @@ function EntryRow({ x, i }: { x: EntryWithBalance; i: number }) {
 }
 
 export function MoneyScreen() {
+  const [tab, setTab] = useStoredState<"flow" | "owed">("money.tab", "flow");
+  return (
+    <Screen
+      title="Money"
+      subtitle={tab === "flow" ? "Earnings and expenses" : "Credit clients and personal loans"}
+      right={
+        <button
+          class="nav-btn"
+          aria-label="Add money entry"
+          onClick={() =>
+            actionSheet([
+              { label: "Add expense", icon: "arrowUpRight", run: () => openTransactionForm(undefined, { type: "expense" }) },
+              { label: "Add income", icon: "arrowDownLeft", run: () => openTransactionForm(undefined, { type: "income", scope: "business" }) },
+              { label: "Loan or credit (owed)", icon: "handshake", run: () => openLedgerForm() },
+            ])
+          }
+        >
+          <Icon name="plus" size={26} />
+        </button>
+      }
+    >
+      <div class="content">
+        <Segmented<"flow" | "owed">
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: "flow", label: "Cash flow" },
+            { value: "owed", label: "Owed" },
+          ]}
+        />
+        <div class="mt16" key={tab}>
+          {tab === "flow" ? <CashFlowView /> : <OwedView />}
+        </div>
+      </div>
+    </Screen>
+  );
+}
+
+function OwedView() {
   const all = useLive(loadLedger, []);
   const [view, setView] = useStoredState<View>("ledger.view", "in");
   const [kind, setKind] = useStoredState<"" | "loan" | "credit">("ledger.kind", "");
@@ -149,16 +190,7 @@ export function MoneyScreen() {
   const total = (list ?? []).reduce((s, x) => s + (x.entry.settledAt ? 0 : x.balance), 0);
 
   return (
-    <Screen
-      title="Money"
-      subtitle="Credit clients and personal loans"
-      right={
-        <button class="nav-btn" aria-label="New money entry" onClick={() => openLedgerForm(undefined, { direction: view === "out" ? "out" : "in" })}>
-          <Icon name="plus" size={26} />
-        </button>
-      }
-    >
-      <div class="content">
+    <>
         <MoneySummary />
         <div class="mt16">
           <Segmented<View>
@@ -218,8 +250,7 @@ export function MoneyScreen() {
             </div>
           </>
         )}
-      </div>
-    </Screen>
+    </>
   );
 }
 

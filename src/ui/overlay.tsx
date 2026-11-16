@@ -231,7 +231,8 @@ export interface ActionItem {
   run: () => void;
 }
 
-export function actionSheet(actions: ActionItem[], title?: string) {
+export function actionSheet(actions: ActionItem[], title?: string, onDismiss?: () => void) {
+  let chosen = false;
   openSheet(
     (close) => (
       <div class="actions">
@@ -242,6 +243,7 @@ export function actionSheet(actions: ActionItem[], title?: string) {
               key={a.label}
               class={`action ${a.destructive ? "destructive" : ""}`}
               onClick={() => {
+                chosen = true;
                 close();
                 setTimeout(a.run, 120);
               }}
@@ -258,7 +260,7 @@ export function actionSheet(actions: ActionItem[], title?: string) {
         </div>
       </div>
     ),
-    { bare: true },
+    { bare: true, onClose: () => !chosen && onDismiss?.() },
   );
 }
 

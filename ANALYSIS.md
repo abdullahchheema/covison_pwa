@@ -253,3 +253,37 @@ These features are new in the PWA. They didn't exist in the web CRM.
 ### Currency
 - PKR is the default everywhere, shown as "Rs 83,100".
 - Deals keep their own currency field, so older non-PKR deals display in their original currency.
+
+### iPhone contacts
+- **Native picker:** Safari's Contact Picker API opens the iOS Contacts sheet. Only the person you pick is shared with the app, and there is no standing permission.
+  - On iOS this is behind a Safari feature flag: Settings → Apps → Safari → Advanced → Feature Flags → "Contact Picker API". The app explains this when the flag is off.
+- **vCard fallback:** always works.
+  - In Contacts, open a person → Share Contact → Save to Files, then pick the `.vcf` file in the app.
+  - It handles vCard 2.1, 3.0 and 4.0, quoted-printable text, and several numbers (the app asks which one to use).
+- **Bulk import:** a multi-contact `.vcf` can be imported from Contacts ⋯ or Settings. People who already exist are skipped, matched by phone number (last 10 digits) or email.
+- The brief said "request no device permissions". This picker was added later at your request, and it is opt-in: it only runs when you tap "From iPhone contacts".
+
+### Deal payments and repeat projects
+- Each deal now tracks the money received on it:
+  - Payments can be labelled Advance, Delivery, Instalment, Extra work or Final payment.
+  - The deal page shows received against the deal value, and either "Rs X still to collect" or "+Rs X extra over the deal value".
+  - Example: a 35,000 deal with 15,000 in advance and 27,000 at delivery shows 42,000 received and +7,000 extra.
+- Every deal payment is an income transaction linked to the deal.
+- If the deal has an open credit receivable, the payment settles that first, and only the amount beyond it becomes extra income. Each rupee is counted once.
+- **New deal with {client}** (on the deal page, and in its ⋯ menu) starts another project for the same contact without creating a duplicate contact.
+
+### Cash flow (Money → Cash flow)
+- New `transactions` table (Dexie version 3, backup `schemaVersion` 3). Version 1 and 2 backups still restore.
+- Fields: income or expense, business or personal, amount, date, category, method (Cash / Bank transfer / JazzCash / Easypaisa / Card / Cheque), note, and an optional contact.
+- Categories come with sensible defaults for each combination of type and business/personal. You can also type your own, and it's suggested next time.
+- **The month view:**
+  - Earned, spent, and saved or overspent
+  - A month switcher and an All / Business / Personal filter
+  - "Where it went" spending by category
+  - Entries grouped by day: tap one to edit it, swipe it to delete it
+- **Home** shows "{Month} so far" with earned, spent and net.
+- **Credit payments flow into cash flow:**
+  - A payment received on a credit entry is recorded as business income.
+  - A payment you make on a credit purchase is recorded as a business expense.
+  - The two stay linked: editing or deleting one updates the other.
+- **Personal loans are not income or spending.** They only appear under Money → Owed.

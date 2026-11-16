@@ -108,6 +108,18 @@ const SPEC: Record<DataTableName, FieldSpec[]> = {
     S("settledAt"),
   ],
   payments: [S("id", true), S("entryId", true), N("amount", true), S("date", true)],
+  transactions: [
+    S("id", true),
+    S("type", true),
+    S("scope", true),
+    N("amount", true),
+    S("currency", true),
+    S("date", true),
+    S("category", true),
+    S("dealId"),
+    S("contactId"),
+    S("ledgerPaymentId"),
+  ],
 };
 
 function kindOf(v: unknown): Kind | "null" | "other" {
@@ -191,6 +203,13 @@ export function validateBackup(raw: unknown): ValidationResult {
     ref("ledger", "contactId", "contacts", false);
     ref("ledger", "dealId", "deals", false);
     ref("payments", "entryId", "ledger", true);
+    ref("transactions", "dealId", "deals", false);
+    ref("transactions", "contactId", "contacts", false);
+    ref("transactions", "ledgerPaymentId", "payments", false);
+    ((data.transactions ?? []) as Record<string, unknown>[]).forEach((r, i) => {
+      if (r.type !== "income" && r.type !== "expense") errors.push(`transactions[${i}].type must be "income" or "expense".`);
+      if (r.scope !== "business" && r.scope !== "personal") errors.push(`transactions[${i}].scope must be "business" or "personal".`);
+    });
     (data.ledger as Record<string, unknown>[] | undefined)?.forEach((r, i) => {
       if (r.direction !== "in" && r.direction !== "out") errors.push(`ledger[${i}].direction must be "in" or "out".`);
       if (r.kind !== "credit" && r.kind !== "loan") errors.push(`ledger[${i}].kind must be "credit" or "loan".`);

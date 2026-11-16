@@ -2,10 +2,14 @@
 // in the header (iOS pattern).
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
-import { DEFAULT_CURRENCY, db, type Activity, type LedgerEntry, type ActivityType, type Company, type Contact, type Deal, type LeadField, type LeadType, type Stage, type Tag, type TagColor, type Task } from "../db/schema";
+import { DEFAULT_CURRENCY, db, type Activity, type LedgerEntry, type Transaction, type ActivityType, type Company, type Contact, type Deal, type LeadField, type LeadType, type Stage, type Tag, type TagColor, type Task } from "../db/schema";
 import {
   addNote,
   addPayment,
+  CATEGORIES,
+  PAYMENT_METHODS,
+  recordDealPayment,
+  saveTransaction,
   saveLedgerEntry,
   todayYmd,
   defaultPipelineId,
@@ -34,9 +38,11 @@ import {
   TASK_PRIORITIES,
 } from "../lib/options";
 import { MAX_LONG, cleanText, isEmail, optText } from "../lib/sanitize";
-import { fromDateTimeInput, toDateTimeInput } from "../lib/format";
-import { Group, Segmented, SelectField, SwitchField, TextArea, TextField } from "../ui/kit";
-import { openSheet, toast } from "../ui/overlay";
+import { fromDateTimeInput, money, toDateTimeInput } from "../lib/format";
+import { Group, Row, Segmented, SelectField, SwitchField, TextArea, TextField } from "../ui/kit";
+import { actionSheet, confirmSheet, openSheet, toast } from "../ui/overlay";
+import { contactPickerSupported, parseVCards, phoneKey, pickPhoneContact, type PhoneContact } from "../lib/phoneContacts";
+import { pickFile } from "./CsvImport";
 import { Icon } from "../ui/icons";
 import { navigate } from "../lib/router";
 
@@ -184,6 +190,12 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
 
   return (
     <div class="form">
+      <PhoneContactButton
+        onPick={(p) => {
+          setF((prev) => ({ ...prev, name: p.name || prev.name, phone: p.phone ?? prev.phone, email: p.email ?? prev.email, jobTitle: p.title ?? prev.jobTitle, companyName: p.org ?? prev.companyName }));
+          if (p.org) setCompanyTouched(true);
+        }}
+      />
       <Group>
         <TextField label="Name" value={f.name} onInput={set("name")} placeholder="Required" autoFocus={!existing} />
         <TextField label="Email" value={f.email} onInput={set("email")} type="email" inputMode="email" />
@@ -733,17 +745,17 @@ function LeadTypeForm({ bind, existing }: { bind: Binding; existing?: LeadType }
  * The day-to-day flow: capture a lead with a phone number and drop it straight
  * into a pipeline stage. Creates (or reuses) the contact and creates the deal.
  */
-export function openLeadForm(defaults: { stageId?: string } = {}) {
-  openForm("New lead", (bind) => <LeadForm bind={bind} defaults={defaults} />);
+export function openLeadForm(defaults: { stageId?: string; contactId?: string } = {}) {
+  openForm(defaults.contactId ? "New deal" : "New lead", (bind) => <LeadForm bind={bind} defaults={defaults} />);
 }
 
-function LeadForm({ bind, defaults }: { bind: Binding; defaults: { stageId?: string } }) {
-  const [mode, setMode] = useState<"new" | "existing">("new");
+function LeadForm({ bind, defaults }: { bind: Binding; defaults: { stageId?: string; contactId?: string } }) {
+  const [mode, setMode] = useState<"new" | "existing">(defaults.contactId ? "existing" : "new");
   const [f, setF] = useState({
     name: "",
     phone: "",
     company: "",
-    contactId: "",
+    contactId: defaults.contactId ?? "",
     dealName: "",
     value: "",
     stageId: defaults.stageId ?? "",
@@ -807,6 +819,9 @@ function LeadForm({ bind, defaults }: { bind: Binding; defaults: { stageId?: str
           { value: "existing", label: "Existing contact" },
         ]}
       />
+      {mode === "new" && (
+        <PhoneContactButton onPick={(p) => setF((prev) => ({ ...prev, name: p.name || prev.name, phone: p.phone ?? prev.phone, company: p.org ?? prev.company }))} />
+      )}
       {mode === "new" ? (
         <Group footer="Enter the number as you'd dial it (e.g. 0300 1234567). WhatsApp opens with it directly.">
           <TextField label="Name" value={f.name} onInput={set("name")} placeholder="Required" autoFocus />
@@ -925,11 +940,12 @@ function PaymentForm({ bind, entry, remaining }: { bind: Binding; entry: LedgerE
   const [amount, setAmount] = useState(String(remaining));
   const [date, setDate] = useState(todayYmd());
   const [note, setNote] = useState("");
+  const [method, setMethod] = useState("Cash");
   bind.current = async () => {
     const a = numOrUndef(amount);
     if (!a || a <= 0) return fail("Enter an amount");
     if (a > remaining + 0.001) return fail(`That's more than the Rs ${remaining.toLocaleString()} left`);
-    await addPayment(entry.id, a, date || todayYmd(), optText(note, 500));
+    await addPayment(entry.id, a, date || todayYmd(), optText(note, 500), method);
     toast(a >= remaining ? "Fully settled 🎉" : "Payment recorded", { icon: "checkCircle" });
   };
   return (
@@ -937,7 +953,286 @@ function PaymentForm({ bind, entry, remaining }: { bind: Binding; entry: LedgerE
       <Group footer={`Remaining: Rs ${remaining.toLocaleString()}. Partial payments are fine.`}>
         <TextField label="Amount (Rs)" value={amount} onInput={setAmount} inputMode="decimal" autoFocus />
         <TextField label="Date" value={date} onInput={setDate} type="date" />
-        <TextField label="Note" value={note} onInput={setNote} placeholder="e.g. cash, bank transfer" />
+        <SelectField label="Method" value={method} placeholder={false} onChange={setMethod} options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))} />
+        <TextField label="Note" value={note} onInput={setNote} placeholder="Optional" />
+      </Group>
+    </div>
+  );
+}
+
+// =================== From iPhone contacts ===================
+export interface ChosenPerson {
+  name: string;
+  phone?: string;
+  email?: string;
+  org?: string;
+  title?: string;
+}
+
+function chooseOne<T>(items: T[], label: (t: T) => string, title: string): Promise<T | null> {
+  if (items.length <= 1) return Promise.resolve(items[0] ?? null);
+  return new Promise((resolve) => {
+    actionSheet(
+      items.slice(0, 40).map((it) => ({ label: label(it), run: () => resolve(it) })),
+      title,
+      () => resolve(null),
+    );
+  });
+}
+
+async function finishChoice(c: PhoneContact): Promise<ChosenPerson | null> {
+  const phone = await chooseOne(c.phones, (p) => p, `Which number for ${c.name}?`);
+  if (c.phones.length > 1 && !phone) return null;
+  return { name: c.name, phone: phone ?? undefined, email: c.emails[0], org: c.org, title: c.title };
+}
+
+async function fromVcfFile(): Promise<ChosenPerson | null> {
+  const [file] = await pickFile(".vcf,text/vcard,text/x-vcard");
+  if (!file) return null;
+  const people = parseVCards(await file.text());
+  if (!people.length) {
+    toast("No contacts found in that file", { error: true });
+    return null;
+  }
+  const c = await chooseOne(people, (p) => (p.phones[0] ? `${p.name} · ${p.phones[0]}` : p.name), "Choose a person");
+  return c ? finishChoice(c) : null;
+}
+
+/** Pick one person from the iPhone's Contacts (native picker, or a shared .vcf file). */
+export async function choosePhoneContact(): Promise<ChosenPerson | null> {
+  if (contactPickerSupported()) {
+    try {
+      const c = await pickPhoneContact();
+      return c ? finishChoice(c) : null;
+    } catch {
+      /* fall through to the file option */
+    }
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let pickingFile = false; // closing the sheet to open the file picker is not a cancel
+    const settle = (v: ChosenPerson | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    openSheet(
+      (close) => (
+        <div class="form">
+          <div class="banner brand">
+            <Icon name="users" size={22} class="b-ico" />
+            <span>Your iPhone hasn't enabled direct contact picking for web apps yet. Choose either option below.</span>
+          </div>
+          <Group label="Quickest: share the contact as a file">
+            <Row title={<span class="t-subhead">1. Open the Contacts app and tap the person</span>} chevron={false} />
+            <Row title={<span class="t-subhead">2. Tap Share Contact → Save to Files</span>} chevron={false} />
+            <Row title={<span class="t-subhead">3. Come back and tap the button below</span>} chevron={false} />
+          </Group>
+          <button
+            class="btn primary block press"
+            onClick={async () => {
+              pickingFile = true;
+              close();
+              settle(await fromVcfFile());
+            }}
+          >
+            <Icon name="file" size={20} /> Choose contact file (.vcf)
+          </button>
+          <Group label="Or turn on the native picker (one-time)" footer="After this, a “From iPhone contacts” tap opens your Contacts list directly. Only the person you pick is shared with the app.">
+            <Row title={<span class="t-subhead">Settings → Apps → Safari → Advanced → Feature Flags → turn on “Contact Picker API”, then reopen Covison</span>} chevron={false} />
+          </Group>
+        </div>
+      ),
+      { title: "From iPhone contacts", onClose: () => !pickingFile && settle(null) },
+    );
+  });
+}
+
+function PhoneContactButton({ onPick }: { onPick: (p: ChosenPerson) => void }) {
+  return (
+    <button
+      class="btn tinted block press"
+      onClick={async () => {
+        const p = await choosePhoneContact();
+        if (p) {
+          onPick(p);
+          toast(`Filled in from ${p.name}`, { icon: "user" });
+        }
+      }}
+    >
+      <Icon name="users" size={20} /> From iPhone contacts
+    </button>
+  );
+}
+
+/** Bulk import of a multi-contact .vcf (Settings / Contacts menu). De-duplicates by phone, then email. */
+export async function importVcfContacts() {
+  const [file] = await pickFile(".vcf,text/vcard,text/x-vcard");
+  if (!file) return;
+  const people = parseVCards(await file.text());
+  if (!people.length) return toast("No contacts found in that file", { error: true });
+  const existing = await db.contacts.toArray();
+  const byPhone = new Set(existing.map((c) => phoneKey(c.phone)).filter(Boolean));
+  const byEmail = new Set(existing.map((c) => (c.email ?? "").toLowerCase()).filter(Boolean));
+  const fresh = people.filter((p) => !(p.phones.some((ph) => byPhone.has(phoneKey(ph))) || p.emails.some((e) => byEmail.has(e.toLowerCase()))));
+  const ok = await confirmSheet({
+    title: `Import ${fresh.length} of ${people.length} contacts?`,
+    message: fresh.length < people.length ? `${people.length - fresh.length} already exist (same phone or email) and will be skipped.` : "Name, phone, email and company are imported.",
+    confirm: `Import ${fresh.length}`,
+  });
+  if (!ok || !fresh.length) return;
+  for (const p of fresh) {
+    await saveContact({
+      name: optText(p.name) ?? "Unnamed",
+      phone: optText(p.phones[0]),
+      email: optText(p.emails[0]),
+      jobTitle: optText(p.title),
+      companyId: p.org ? await resolveCompanyQuiet(p.org) : undefined,
+      status: "new",
+      customFields: {},
+    });
+  }
+  toast(`Imported ${fresh.length} contacts`, { icon: "users" });
+}
+
+async function resolveCompanyQuiet(name: string): Promise<string | undefined> {
+  const n = optText(name);
+  if (!n) return undefined;
+  const hit = await db.companies.filter((c) => c.name.trim().toLowerCase() === n.toLowerCase()).first();
+  return hit?.id ?? saveCompany({ name: n });
+}
+
+// =================== Deal payment (advance, delivery, extra...) ===================
+const PAYMENT_LABELS = ["Advance", "Delivery", "Instalment", "Extra work", "Final payment"];
+
+export function openDealPaymentForm(deal: Deal, received: number) {
+  openForm("Payment received", (bind) => <DealPaymentForm bind={bind} deal={deal} received={received} />);
+}
+
+function DealPaymentForm({ bind, deal, received }: { bind: Binding; deal: Deal; received: number }) {
+  const left = Math.max(0, deal.value - received);
+  const [amount, setAmount] = useState(left ? String(left) : "");
+  const [label, setLabel] = useState(received === 0 ? "Advance" : left > 0 ? "Delivery" : "Extra work");
+  const [date, setDate] = useState(todayYmd());
+  const [method, setMethod] = useState("Cash");
+  bind.current = async () => {
+    const a = numOrUndef(amount);
+    if (!a || a <= 0) return fail("Enter an amount");
+    await recordDealPayment(deal.id, a, date || todayYmd(), optText(label, 80) ?? "Payment", method || undefined);
+    const total = received + a;
+    toast(total > deal.value ? `Received ${money(total, deal.currency)}, ${money(total - deal.value, deal.currency)} over the deal value` : `Received ${money(total, deal.currency)} of ${money(deal.value, deal.currency)}`, { icon: "wallet" });
+  };
+  return (
+    <div class="form">
+      <div class="row wrap gap8" style="padding:0 4px">
+        {PAYMENT_LABELS.map((l) => (
+          <button key={l} class="chip press" aria-pressed={label === l} onClick={() => setLabel(l)}>
+            {l}
+          </button>
+        ))}
+      </div>
+      <Group footer={`Deal ${money(deal.value, deal.currency)} · received so far ${money(received, deal.currency)}. You can receive more than the deal value (extra work); it all counts as income.`}>
+        <TextField label="Amount (Rs)" value={amount} onInput={setAmount} inputMode="decimal" placeholder="0" autoFocus />
+        <TextField label="For" value={label} onInput={setLabel} placeholder="Advance, delivery…" />
+        <TextField label="Date" value={date} onInput={setDate} type="date" />
+        <SelectField label="Method" value={method} placeholder={false} onChange={setMethod} options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))} />
+      </Group>
+    </div>
+  );
+}
+
+// =================== Income / expense ===================
+export function openTransactionForm(existing?: Transaction, defaults: Partial<Transaction> = {}) {
+  openForm(existing ? "Edit entry" : defaults.type === "income" ? "Add income" : "Add expense", (bind) => <TransactionForm bind={bind} existing={existing} defaults={defaults} />);
+}
+
+function TransactionForm({ bind, existing, defaults }: { bind: Binding; existing?: Transaction; defaults: Partial<Transaction> }) {
+  const t = { ...defaults, ...existing };
+  const [type, setType] = useState<Transaction["type"]>(t.type ?? "expense");
+  const [scope, setScope] = useState<Transaction["scope"]>(t.scope ?? "personal");
+  const [amount, setAmount] = useState(t.amount ? String(t.amount) : "");
+  const [category, setCategory] = useState(t.category ?? "");
+  const [date, setDate] = useState(t.date ?? todayYmd());
+  const [method, setMethod] = useState(t.method ?? "Cash");
+  const [note, setNote] = useState(t.note ?? "");
+  const [contactId, setContactId] = useState(t.contactId ?? "");
+  const contacts = useLive(() => db.contacts.orderBy("name").toArray(), []);
+  const used = useLive(async () => [...new Set((await db.transactions.toArray()).map((x) => x.category))], []);
+  const suggestions = [...new Set([...CATEGORIES[scope][type], ...(used ?? [])])];
+  const shown = CATEGORIES[scope][type];
+  const listId = useState(() => `cat-${Math.random().toString(36).slice(2)}`)[0];
+
+  bind.current = async () => {
+    const a = numOrUndef(amount);
+    if (!a || a <= 0) return fail("Enter an amount");
+    const cat = optText(category, 60) ?? "Other";
+    await saveTransaction({
+      id: existing?.id,
+      type,
+      scope,
+      amount: a,
+      currency: t.currency ?? DEFAULT_CURRENCY,
+      date: date || todayYmd(),
+      category: cat,
+      method: method || undefined,
+      note: optText(note, 2000),
+      contactId: contactId || undefined,
+      dealId: t.dealId,
+      ledgerPaymentId: t.ledgerPaymentId,
+    });
+    toast(existing ? "Updated" : type === "income" ? "Income added" : "Expense added", { icon: "wallet" });
+  };
+
+  return (
+    <div class="form">
+      <Segmented<Transaction["type"]>
+        value={type}
+        onChange={(v) => {
+          setType(v);
+          if (!existing) setCategory("");
+        }}
+        options={[
+          { value: "expense", label: "Expense" },
+          { value: "income", label: "Income" },
+        ]}
+      />
+      <Segmented<Transaction["scope"]>
+        value={scope}
+        onChange={(v) => {
+          setScope(v);
+          if (!existing) setCategory("");
+        }}
+        options={[
+          { value: "personal", label: "Personal" },
+          { value: "business", label: "Business" },
+        ]}
+      />
+      <Group>
+        <TextField label="Amount (Rs)" value={amount} onInput={setAmount} inputMode="decimal" placeholder="0" autoFocus={!existing} />
+        <TextField label="Date" value={date} onInput={setDate} type="date" />
+      </Group>
+      <div>
+        <div class="group-label">Category</div>
+        <div class="row wrap gap8" style="padding:0 4px 10px">
+          {shown.map((c) => (
+            <button key={c} class="chip press" aria-pressed={category === c} onClick={() => setCategory(c)}>
+              {c}
+            </button>
+          ))}
+        </div>
+        <div class="group">
+          <TextField label="Or type" value={category} onInput={setCategory} list={listId} placeholder="Your own category" />
+          <datalist id={listId}>
+            {suggestions.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+        </div>
+      </div>
+      <Group>
+        <SelectField label="Method" value={method} placeholder={false} onChange={setMethod} options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))} />
+        <SelectField label="Person" value={contactId} onChange={setContactId} placeholder="None" options={(contacts ?? []).map((x) => ({ value: x.id, label: x.name }))} />
+        <TextField label="Note" value={note} onInput={setNote} placeholder="Optional" />
       </Group>
     </div>
   );

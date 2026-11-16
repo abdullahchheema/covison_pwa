@@ -23,6 +23,7 @@ const STORES = [
   "activities",
   "ledger",
   "payments",
+  "transactions",
 ];
 
 /** Read every data store straight from IndexedDB (independent of app code). */
@@ -150,11 +151,13 @@ test("export → erase → import round-trips with zero data loss, and stays XSS
     const stages = await all<{ id: string; pipelineId: string }>("stages");
     const evil = `<img src=x onerror="window.__xss=1"><script>window.__xss=2</script>`;
     const t = new Date().toISOString();
-    const tx = db.transaction(["contacts", "companies", "deals", "tasks", "activities", "tags", "contactTags", "ledger", "payments"], "readwrite");
+    const tx = db.transaction(["contacts", "companies", "deals", "tasks", "activities", "tags", "contactTags", "ledger", "payments", "transactions"], "readwrite");
     for (let i = 0; i < 15; i++) {
       tx.objectStore("ledger").put({ id: `l-${i}`, direction: i % 2 ? "out" : "in", kind: i % 3 ? "loan" : "credit", personName: `Person ${i} ${evil}`, phone: "0300 1112233", contactId: i < 5 ? `c-${i}` : undefined, amount: 1000 * (i + 1), currency: "PKR", date: "2026-10-01", dueDate: i % 4 ? "2026-12-01" : undefined, note: `Loan 💸 ${i}`, createdAt: t, updatedAt: t });
       tx.objectStore("payments").put({ id: `p-${i}`, entryId: `l-${i}`, amount: 100 * i, date: "2026-10-15", createdAt: t });
     }
+    for (let i = 0; i < 25; i++)
+      tx.objectStore("transactions").put({ id: `tx-${i}`, type: i % 3 ? "expense" : "income", scope: i % 2 ? "personal" : "business", amount: 250 * (i + 1), currency: "PKR", date: `2026-11-${String((i % 28) + 1).padStart(2, "0")}`, category: i % 2 ? "Food 🍛" : "Client payment", method: "Cash", note: `note ${evil}`, contactId: i < 5 ? `c-${i}` : undefined, dealId: i < 3 ? `d-${i}` : undefined, createdAt: t, updatedAt: t });
     for (let i = 0; i < 60; i++) {
       const cid = `c-${i}`;
       tx.objectStore("companies").put({ id: `co-${i}`, name: `Firma ${i} 🚀 ${i % 7 === 0 ? evil : ""}`, website: i % 5 === 0 ? "javascript:alert(1)" : `https://f${i}.example`, createdAt: t, updatedAt: t });
@@ -297,6 +300,7 @@ test("money: Home totals, WhatsApp links, and won-on-credit receivable", async (
 
   // Record a payment on a loan
   await page.goto("./#/money");
+  await page.getByRole("button", { name: "Owed", exact: true }).click();
   await page.getByText("Bilal (cousin)").click();
   await page.getByRole("button", { name: "Payment received" }).click();
   const sheet = page.getByRole("dialog").last();
@@ -347,4 +351,141 @@ test("contact form: typing a new company adds it to Companies, an existing one i
   const usman = db.contacts.find((c) => c.name === "Usman Tariq")!;
   expect(sana.companyId).toBe(zetas[0].id);
   expect(usman.companyId).toBe(zetas[0].id);
+});
+
+test("iPhone contacts: .vcf pick fills the form, bulk import skips existing people", async ({ page }) => {
+  const vcf = [
+    "BEGIN:VCARD", "VERSION:3.0", "N:Iqbal;Hamza;;;", "FN:Hamza Iqbal", "ORG:Iqbal Textiles;", "TITLE:Owner",
+    "item1.TEL;type=CELL;type=pref:0301 2223334", "TEL;type=WORK:+92 42 1234567", "EMAIL;type=INTERNET:hamza@iqbal.pk", "END:VCARD",
+    "BEGIN:VCARD", "VERSION:2.1", "N;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:=D8=B9=D9=84=DB=8C;;;;", "TEL;CELL:0322-9998887", "END:VCARD",
+    "BEGIN:VCARD", "VERSION:4.0", "FN:Ayesha Khan", "TEL;VALUE=uri:tel:+923001112233", "END:VCARD",
+  ].join("\r\n");
+  const one = ["BEGIN:VCARD", "VERSION:3.0", "FN:Hamza Iqbal", "ORG:Iqbal Textiles", "TEL:0301 2223334", "TEL:+92 42 1234567", "EMAIL:hamza@iqbal.pk", "END:VCARD"].join("\n");
+  writeFileSync(join(__dirname, ".tmp/people.vcf"), vcf);
+  writeFileSync(join(__dirname, ".tmp/hamza.vcf"), one);
+
+  // Single pick inside the contact form (Chromium has no Contact Picker → file fallback)
+  await page.goto("./#/contacts");
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByRole("dialog").last().getByRole("button", { name: "New contact", exact: true }).click();
+  await page.getByRole("dialog").last().getByRole("button", { name: "From iPhone contacts" }).click();
+  const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.getByRole("dialog").last().getByRole("button", { name: /Choose contact file/ }).click()]);
+  await fc.setFiles(join(__dirname, ".tmp/hamza.vcf"));
+  await page.getByRole("dialog").last().getByRole("button", { name: "0301 2223334" }).click(); // two numbers → choose
+  const form = page.getByRole("dialog").last();
+  await expect(form.getByLabel("Name", { exact: true })).toHaveValue("Hamza Iqbal");
+  await expect(form.getByLabel("Phone")).toHaveValue("0301 2223334");
+  await expect(form.getByLabel("Email")).toHaveValue("hamza@iqbal.pk");
+  await expect(form.getByLabel("Company", { exact: true })).toHaveValue("Iqbal Textiles");
+  await form.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Hamza Iqbal" })).toBeVisible();
+
+  // Bulk: Hamza already exists (same phone) → skipped; the other two are imported
+  await page.goto("./#/settings");
+  const [fc2] = await Promise.all([page.waitForEvent("filechooser"), page.getByText("Import iPhone contacts", { exact: true }).click()]);
+  await fc2.setFiles(join(__dirname, ".tmp/people.vcf"));
+  await expect(page.getByText("Import 2 of 3 contacts?")).toBeVisible();
+  await page.getByRole("dialog").last().getByRole("button", { name: "Import 2", exact: true }).click();
+  await expect(page.getByText("Imported 2 contacts")).toBeVisible();
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  expect(db.contacts.filter((c) => c.name === "Hamza Iqbal").length).toBe(1);
+  expect(db.contacts.find((c) => c.name === "علی")).toMatchObject({ phone: "0322-9998887" });
+  expect(db.contacts.find((c) => c.name === "Ayesha Khan")).toMatchObject({ phone: "+923001112233" });
+});
+
+test("deal payments: 35,000 deal, 15,000 advance + 27,000 at delivery = 42,000 received", async ({ page }) => {
+  await page.goto("./#/pipeline");
+  await page.getByRole("button", { name: "New lead" }).click();
+  const lead = page.getByRole("dialog").last();
+  await lead.getByLabel("Name", { exact: true }).fill("Faisal Ahmed");
+  await lead.getByLabel("Phone").fill("0333 4445556");
+  await lead.getByLabel("Value (Rs)").fill("35000");
+  await lead.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByText("Faisal Ahmed").first().click();
+
+  const pay = async (amount: string, label: string) => {
+    await page.getByRole("button", { name: /Record (advance|payment|extra payment)/ }).click();
+    const s = page.getByRole("dialog").last();
+    await s.getByRole("button", { name: label, exact: true }).click();
+    await s.getByLabel("Amount (Rs)").fill(amount);
+    await s.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForTimeout(500);
+  };
+  await pay("15000", "Advance");
+  await expect(page.getByText(/20,000 still to collect/)).toBeVisible();
+  await pay("27000", "Delivery");
+  await expect(page.getByText(/7,000 extra over the deal value/)).toBeVisible();
+  await expect(page.locator(".card .c-success.t-metric").first()).toHaveText(/42,000/);
+
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  const deal = db.deals.find((d) => d.name === "Faisal Ahmed")!;
+  const incomes = db.transactions.filter((t) => t.dealId === deal.id);
+  expect(incomes.map((t) => [t.amount, t.note, t.type, t.scope]).sort()).toEqual([[15000, "Advance", "income", "business"], [27000, "Delivery", "income", "business"]]);
+
+  // New project with the same client from the deal page
+  await page.getByRole("button", { name: "Options" }).click();
+  await page.getByRole("button", { name: "New deal with Faisal" }).click();
+  const nd = page.getByRole("dialog").last();
+  await nd.getByLabel("Deal name").fill("Faisal website v2");
+  await nd.getByLabel("Value (Rs)").fill("20000");
+  await nd.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText(/Lead added to/)).toBeVisible();
+  const db2 = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  expect(db2.contacts.filter((c) => c.name === "Faisal Ahmed").length).toBe(1);
+  expect(db2.deals.filter((d) => d.contactId === deal.contactId).length).toBe(2);
+});
+
+test("credit client: deal payment settles the receivable and is counted once in cash flow", async ({ page }) => {
+  await page.goto("./#/pipeline");
+  await page.getByRole("button", { name: "New lead" }).click();
+  const lead = page.getByRole("dialog").last();
+  await lead.getByLabel("Name", { exact: true }).fill("Credit Rehan");
+  await lead.getByLabel("Pays").selectOption("credit");
+  await lead.getByLabel("Value (Rs)").fill("60000");
+  await lead.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByText("Credit Rehan").first().click();
+  await page.getByRole("button", { name: "Won" }).click();
+  await page.getByRole("dialog").last().getByRole("button", { name: "Add to receivables", exact: true }).click();
+  await expect(page.getByText("Added to People owe you")).toBeVisible();
+  await page.getByRole("button", { name: /Record (advance|payment)/ }).click();
+  const s = page.getByRole("dialog").last();
+  await s.getByLabel("Amount (Rs)").fill("70000"); // 60,000 settles the credit, 10,000 is extra
+  await s.getByRole("button", { name: "Save", exact: true }).click();
+  await page.waitForTimeout(600);
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  const deal = db.deals.find((d) => d.name === "Credit Rehan")!;
+  const entry = db.ledger.find((e) => e.dealId === deal.id)!;
+  expect(entry.settledAt).toBeTruthy();
+  expect(db.payments.filter((p) => p.entryId === entry.id).map((p) => p.amount)).toEqual([60000]);
+  const tx = db.transactions.filter((t) => t.dealId === deal.id);
+  expect(tx.map((t) => t.amount).sort((a, b) => Number(a) - Number(b))).toEqual([10000, 60000]);
+  expect(tx.reduce((sum, t) => sum + Number(t.amount), 0)).toBe(70000);
+});
+
+test("cash flow: add personal expense and business income, month totals update", async ({ page }) => {
+  await page.goto("./#/settings");
+  await page.getByText("Erase all data", { exact: true }).click();
+  await page.getByRole("dialog").last().getByRole("button", { name: "Erase everything", exact: true }).click();
+  await page.goto("./#/money");
+  await page.getByRole("button", { name: "Cash flow" }).click();
+  const add = async (kind: "Income" | "Expense", amount: string, category: string) => {
+    await page.getByRole("button", { name: kind, exact: true }).click();
+    const s = page.getByRole("dialog").last();
+    await s.getByLabel("Amount (Rs)").fill(amount);
+    await s.getByRole("button", { name: category, exact: true }).click();
+    await s.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForTimeout(400);
+  };
+  await add("Expense", "2500", "Groceries");
+  await add("Income", "50000", "Client payment");
+  await add("Expense", "1200", "Food");
+  await expect(page.getByText("Saved Rs 46,300")).toBeVisible();
+  await expect(page.getByText("Where it went")).toBeVisible();
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  expect(db.transactions.length).toBe(3);
+  expect(db.transactions.find((t) => t.category === "Groceries")).toMatchObject({ type: "expense", scope: "personal", amount: 2500 });
+  expect(db.transactions.find((t) => t.category === "Client payment")).toMatchObject({ type: "income", scope: "business", amount: 50000 });
+  // Home shows the month at a glance
+  await page.goto("./#/");
+  await expect(page.getByText("+Rs 46,300 net")).toBeVisible();
 });

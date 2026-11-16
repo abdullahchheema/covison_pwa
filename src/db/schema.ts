@@ -204,6 +204,31 @@ export interface Payment {
   createdAt: string;
 }
 
+/**
+ * A money movement for the cash-flow book: income or expense, business or
+ * personal. Deal payments (advance, delivery, extras) are income
+ * transactions linked to the deal. Payments on credit entries create a
+ * linked transaction too (`ledgerPaymentId`), so cash flow stays complete
+ * without double entry. Personal loans are NOT income/expense and only live
+ * in the ledger.
+ */
+export interface Transaction {
+  id: string;
+  type: "income" | "expense";
+  scope: "business" | "personal";
+  amount: number;
+  currency: string;
+  date: string; // YYYY-MM-DD
+  category: string;
+  method?: string; // Cash, Bank, JazzCash, Easypaisa, Card
+  note?: string;
+  contactId?: string;
+  dealId?: string;
+  ledgerPaymentId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Meta {
   key: string;
   value: unknown;
@@ -225,6 +250,7 @@ export class CovisonDB extends Dexie {
   projectTodos!: Table<ProjectTodo, string>;
   ledger!: Table<LedgerEntry, string>;
   payments!: Table<Payment, string>;
+  transactions!: Table<Transaction, string>;
   meta!: Table<Meta, string>;
 
   constructor(name = "covison-pocket") {
@@ -250,6 +276,10 @@ export class CovisonDB extends Dexie {
       ledger: "id, direction, contactId, dealId, settledAt, date",
       payments: "id, entryId, date",
     });
+    // v3: cash-flow book (income / expenses, business / personal, deal payments).
+    this.version(3).stores({
+      transactions: "id, date, type, scope, category, dealId, contactId, ledgerPaymentId",
+    });
   }
 }
 
@@ -272,9 +302,10 @@ export const DATA_TABLES = [
   "activities",
   "ledger",
   "payments",
+  "transactions",
 ] as const;
 export type DataTableName = (typeof DATA_TABLES)[number];
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const DEFAULT_CURRENCY = "PKR";

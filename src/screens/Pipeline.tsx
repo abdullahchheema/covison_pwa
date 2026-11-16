@@ -3,7 +3,7 @@
 // dock, plus a "Move to…" sheet as the accessible fallback.
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { db, type Deal, type Stage } from "../db/schema";
-import { defaultPipelineId, deleteDeal, moveDeal, saveLedgerEntry, todayYmd } from "../db/repo";
+import { dealReceived, defaultPipelineId, deleteDeal, moveDeal, saveLedgerEntry, todayYmd } from "../db/repo";
 import { exportCsv } from "../db/csvExport";
 import { useLive } from "../lib/hooks";
 import { money, shortDate } from "../lib/format";
@@ -13,7 +13,7 @@ import { Avatar, Badge, Empty, Group, Row, Screen, SearchField, useDebounced } f
 import { actionSheet, confirmSheet, toast } from "../ui/overlay";
 import { openWhatsApp, waHref } from "../lib/whatsapp";
 import { Draggable, DropDock } from "../ui/drag";
-import { openDealForm, openLeadForm, openLedgerForm } from "./forms";
+import { openDealForm, openDealPaymentForm, openLeadForm, openLedgerForm, openTransactionForm } from "./forms";
 import { TaskSection, Timeline, confirmDelete } from "./shared";
 
 async function loadBoard() {
@@ -298,7 +298,8 @@ export function DealDetail({ id }: { id: string }) {
       d.companyId ? db.companies.get(d.companyId) : undefined,
     ]);
     const receivable = await db.ledger.where("dealId").equals(d.id).first();
-    return { d, stages, contact, company, receivable };
+    const paid = await dealReceived(d.id);
+    return { d, stages, contact, company, receivable, paid };
   }, [id]);
 
   if (data === undefined) return <Screen title="" backLabel="Pipeline" large={false}><div /></Screen>;
@@ -308,7 +309,10 @@ export function DealDetail({ id }: { id: string }) {
         <Empty icon="dollar" title="Deal not found" />
       </Screen>
     );
-  const { d, stages, contact, company, receivable } = data;
+  const { d, stages, contact, company, receivable, paid } = data;
+  const extra = paid.received - d.value;
+  const newDealForClient = () =>
+    openLeadForm({ stageId: stages.find((s) => !s.isWon && !s.isLost)?.id, contactId: contact?.id });
   const stage = stages.find((s) => s.id === d.stageId);
   const idx = stages.findIndex((s) => s.id === d.stageId);
   const openStages = stages.filter((s) => !s.isWon && !s.isLost);
@@ -333,6 +337,8 @@ export function DealDetail({ id }: { id: string }) {
             onClick={() =>
               actionSheet([
                 { label: "Move to stage…", icon: "move", run: () => moveSheet(d, stages) },
+                { label: "Record a payment", icon: "wallet", run: () => openDealPaymentForm(d, paid.received) },
+                ...(contact ? [{ label: `New deal with ${contact.name.split(" ")[0]}`, icon: "plus" as const, run: newDealForClient }] : []),
                 { label: "Delete deal", icon: "trash", destructive: true, run: () => void confirmDelete("deal", () => deleteDeal(d.id), () => back("/pipeline")) },
               ])
             }
@@ -389,6 +395,63 @@ export function DealDetail({ id }: { id: string }) {
               </button>
             )}
           </div>
+        )}
+
+        <section class="section">
+          <div class="section-head">
+            <h2>Payments</h2>
+            <button class="link" onClick={() => openDealPaymentForm(d, paid.received)}>
+              Record
+            </button>
+          </div>
+          <div class="card rise" style={{ "--i": 2 } as never}>
+            <div class="row between">
+              <div class="col">
+                <span class="t-footnote c3">Received</span>
+                <span class="t-title2 t-metric c-success">{money(paid.received, d.currency)}</span>
+              </div>
+              <div class="col" style="align-items:flex-end">
+                <span class="t-footnote c3">Deal value</span>
+                <span class="t-title3 t-metric">{money(d.value, d.currency)}</span>
+              </div>
+            </div>
+            <div class="bar-track mt12" style="height:8px">
+              <div class="bar-fill won" style={{ width: `${d.value > 0 ? Math.min(100, Math.max(paid.received > 0 ? 3 : 0, (paid.received / d.value) * 100)) : paid.received > 0 ? 100 : 0}%` }} />
+            </div>
+            <p class="t-footnote mt8" style="font-weight:600">
+              {extra > 0 ? (
+                <span class="c-success">+{money(extra, d.currency)} extra over the deal value</span>
+              ) : extra < 0 ? (
+                <span class="c2">{money(-extra, d.currency)} still to collect</span>
+              ) : paid.received > 0 ? (
+                <span class="c-success">Fully paid</span>
+              ) : (
+                <span class="c3">Nothing received yet</span>
+              )}
+            </p>
+            {paid.items.length > 0 && (
+              <div class="mt12" style="border-top:0.5px solid var(--line)">
+                {paid.items.map((t) => (
+                  <button key={t.id} class="row between" style="width:100%;padding:10px 0;text-align:left" onClick={() => openTransactionForm(t)}>
+                    <span class="col">
+                      <span class="t-subhead" style="font-weight:600">{t.note || t.category}</span>
+                      <span class="t-footnote c3">{[shortDate(t.date), t.method].filter(Boolean).join(" · ")}</span>
+                    </span>
+                    <span class="t-subhead num c-success">+{money(t.amount, t.currency)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button class="btn tinted block press mt12" onClick={() => openDealPaymentForm(d, paid.received)}>
+              <Icon name="plus" size={20} /> {paid.received === 0 ? "Record advance" : extra >= 0 ? "Record extra payment" : "Record payment"}
+            </button>
+          </div>
+        </section>
+
+        {contact && stage?.isWon && (
+          <button class="btn plain block press mt12" onClick={newDealForClient}>
+            <Icon name="plus" size={20} /> New deal / project with {contact.name.split(" ")[0]}
+          </button>
         )}
 
         <Group class="section">

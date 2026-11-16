@@ -15,6 +15,7 @@ import { Icon } from "../ui/icons";
 import { Group, Row, Screen, Segmented, TextField } from "../ui/kit";
 import { actionSheet, confirmSheet, openSheet, toast } from "../ui/overlay";
 import { pickFile } from "./CsvImport";
+import { importVcfContacts } from "./forms";
 import { getCountryCode, setCountryCode } from "../lib/whatsapp";
 
 const DAY = 86400000;
@@ -32,6 +33,7 @@ const TABLE_LABELS: Record<string, string> = {
   stages: "stages",
   ledger: "money entries",
   payments: "payments",
+  transactions: "income & expenses",
 };
 
 function useBackupStatus() {
@@ -318,6 +320,12 @@ export function SettingsScreen() {
         </div>
 
         <Group label="Bring data over" footer="Field mapping is documented in ANALYSIS.md, section 6.">
+          <Row
+            onClick={() => void importVcfContacts()}
+            lead={<span class="tile blue"><Icon name="users" size={16} /></span>}
+            title="Import iPhone contacts"
+            sub="From a .vcf file, skips people you already have"
+          />
           <Row onClick={doLegacyImport} lead={<span class="tile indigo"><Icon name="upload" size={16} /></span>} title="Import from existing CRM" sub="Web CRM CSV exports or Supabase tables" />
           <Row
             onClick={() =>

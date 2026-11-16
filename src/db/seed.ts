@@ -1,4 +1,4 @@
-import { db, type LedgerEntry, type Stage } from "./schema";
+import { db, type LedgerEntry, type Stage, type Transaction } from "./schema";
 import { getMeta, now, setMeta, uid } from "./repo";
 
 /**
@@ -204,8 +204,29 @@ export async function loadSampleData(): Promise<void> {
     { direction: "out", kind: "loan", personName: "Ali Raza", phone: "0345 9988776", amount: 100000, date: ymd(-60), note: "Personal loan" },
   ].map((e) => ({ ...e, id: uid(), currency: "PKR", createdAt: t, updatedAt: t })) as LedgerEntry[];
   await db.ledger.bulkAdd(ledger);
+  const firstPay = uid();
   await db.payments.bulkAdd([
-    { id: uid(), entryId: ledger[0].id, amount: 100000, date: ymd(-5), note: "First instalment", createdAt: t },
+    { id: firstPay, entryId: ledger[0].id, amount: 100000, date: ymd(-5), note: "First instalment", createdAt: t },
     { id: uid(), entryId: ledger[3].id, amount: 40000, date: ymd(-20), createdAt: t },
   ]);
+
+  // Cash flow: a few days of business and personal income/expenses.
+  const tx = (o: Partial<Transaction> & Pick<Transaction, "type" | "scope" | "amount" | "category">, day: number): Transaction => ({
+    id: uid(),
+    currency: "PKR",
+    date: ymd(day),
+    method: "Cash",
+    createdAt: t,
+    updatedAt: t,
+    ...o,
+  });
+  await db.transactions.bulkAdd([
+    tx({ type: "income", scope: "business", amount: 100000, category: "Client payment", note: "First instalment", contactId: contacts[0].id, ledgerPaymentId: firstPay, method: "Bank transfer" }, -5),
+    tx({ type: "income", scope: "business", amount: 45000, category: "Services", note: "Logo design" }, -3),
+    tx({ type: "expense", scope: "business", amount: 12000, category: "Software", note: "Hosting + domain", method: "Card" }, -2),
+    tx({ type: "expense", scope: "business", amount: 3500, category: "Transport", note: "Client visits" }, -1),
+    tx({ type: "expense", scope: "personal", amount: 8200, category: "Groceries" }, -1),
+    tx({ type: "expense", scope: "personal", amount: 4500, category: "Fuel" }, 0),
+    tx({ type: "expense", scope: "personal", amount: 1800, category: "Food", note: "Dinner" }, 0),
+  ].filter((x) => x.date.slice(0, 7) === ymd(0).slice(0, 7) || x.ledgerPaymentId));
 }

@@ -18,7 +18,7 @@ import { SettingsScreen } from "./screens/Settings";
 import { LedgerDetail, MoneyScreen } from "./screens/Ledger";
 import { StagesScreen } from "./screens/Stages";
 import { NotFound } from "./screens/NotFound";
-import { openCompanyForm, openContactForm, openDealForm, openLeadForm, openLedgerForm, openNoteForm, openTaskForm } from "./screens/forms";
+import { openCompanyForm, openContactForm, openDealForm, openLeadForm, openLedgerForm, openNoteForm, openTaskForm, openTransactionForm } from "./screens/forms";
 
 const ROUTES: [string, (p: Record<string, string>) => JSX.Element][] = [
   ["/", () => <Dashboard />],
@@ -133,7 +133,9 @@ function Fab() {
     actionSheet(
       [
         { label: "New lead", icon: "sparkles", run: () => openLeadForm() },
-        { label: "Money entry (credit / loan)", icon: "wallet", run: () => openLedgerForm() },
+        { label: "Add expense", icon: "arrowUpRight", run: () => openTransactionForm(undefined, { type: "expense" }) },
+        { label: "Add income", icon: "arrowDownLeft", run: () => openTransactionForm(undefined, { type: "income", scope: "business" }) },
+        { label: "Loan or credit (owed)", icon: "handshake", run: () => openLedgerForm() },
         { label: "New contact", icon: "user", run: () => openContactForm() },
         { label: "New deal", icon: "dollar", run: () => openDealForm() },
         { label: "New task", icon: "tasks", run: () => openTaskForm() },
