@@ -1,0 +1,27 @@
+{
+  "name": "covison-pocket",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Covison Pocket: a private, offline-first, single-user CRM for iPhone.",
+  "type": "module",
+  "scripts": {
+    "icons": "node scripts/icons.mjs",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "check:safety": "node scripts/check-safety.mjs",
+    "build": "npm run typecheck && npm run check:safety && vite build",
+    "preview": "vite preview --port 4173",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "dexie": "^4.0.11",
+    "preact": "^10.26.9"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.1",
+    "@preact/preset-vite": "^2.10.2",
+    "@resvg/resvg-js": "^2.6.2",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
