@@ -324,3 +324,27 @@ test("money: Home totals, WhatsApp links, and won-on-credit receivable", async (
   expect(entry).toMatchObject({ direction: "in", kind: "credit", amount: 75000, currency: "PKR", phone: "0312 5550001" });
   expect(entry.dealId).toBeTruthy();
 });
+
+test("contact form: typing a new company adds it to Companies, an existing one is reused", async ({ page }) => {
+  await page.goto("./#/contacts");
+  const addContact = async (name: string, company: string) => {
+    await page.getByRole("button", { name: "Create" }).click();
+    await page.getByRole("dialog").last().getByRole("button", { name: "New contact", exact: true }).click();
+    const sheet = page.getByRole("dialog").last();
+    await sheet.getByLabel("Name", { exact: true }).fill(name);
+    await sheet.getByLabel("Company", { exact: true }).fill(company);
+    await sheet.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("heading", { name })).toBeVisible();
+    await page.goto("./#/contacts");
+  };
+  await addContact("Sana Malik", "Zeta Traders");
+  await expect(page.getByText("“Zeta Traders” added to Companies")).toBeVisible();
+  await addContact("Usman Tariq", "zeta traders "); // same company, different case/spacing
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  const zetas = db.companies.filter((c) => String(c.name).toLowerCase().trim() === "zeta traders");
+  expect(zetas.length).toBe(1);
+  const sana = db.contacts.find((c) => c.name === "Sana Malik")!;
+  const usman = db.contacts.find((c) => c.name === "Usman Tariq")!;
+  expect(sana.companyId).toBe(zetas[0].id);
+  expect(usman.companyId).toBe(zetas[0].id);
+});

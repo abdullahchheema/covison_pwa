@@ -374,6 +374,7 @@ export function TextField({
   error,
   stack,
   maxLength = 300,
+  list,
 }: FieldProps & {
   value: string;
   onInput: (v: string) => void;
@@ -383,6 +384,8 @@ export function TextField({
   autoFocus?: boolean;
   stack?: boolean;
   maxLength?: number;
+  /** id of a <datalist> with suggestions (free text still allowed). */
+  list?: string;
 }) {
   const id = useRef(`f${Math.random().toString(36).slice(2)}`).current;
   const ref = useRef<HTMLInputElement>(null);
@@ -401,6 +404,7 @@ export function TextField({
         inputMode={inputMode}
         maxLength={maxLength}
         autoComplete="off"
+        list={list}
         onInput={(e) => onInput((e.target as HTMLInputElement).value)}
       />
     </div>

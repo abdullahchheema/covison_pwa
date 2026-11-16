@@ -62,6 +62,44 @@ function fail(msg: string): false {
   return false;
 }
 
+// =================== Company picker (type a name, pick or create) ===================
+/** Find a company by name (case-insensitive) or create it. Empty name → no company. */
+export async function resolveCompany(name: string): Promise<string | undefined> {
+  const n = optText(name);
+  if (!n) return undefined;
+  const hit = await db.companies.filter((c) => c.name.trim().toLowerCase() === n.toLowerCase()).first();
+  if (hit) return hit.id;
+  const id = await saveCompany({ name: n });
+  toast(`“${n}” added to Companies`, { icon: "building" });
+  return id;
+}
+
+/** Free-text company field with suggestions from existing companies. */
+function CompanyField({ value, onInput }: { value: string; onInput: (v: string) => void }) {
+  const names = useLive(async () => (await db.companies.orderBy("name").toArray()).map((c) => c.name), []);
+  const listId = useState(() => `co-${Math.random().toString(36).slice(2)}`)[0];
+  const n = value.trim().toLowerCase();
+  const isNew = !!n && names !== undefined && !names.some((x) => x.trim().toLowerCase() === n);
+  return (
+    <>
+      <TextField label="Company" value={value} onInput={onInput} list={listId} placeholder="Type or pick" />
+      <datalist id={listId}>
+        {(names ?? []).map((x) => (
+          <option key={x} value={x} />
+        ))}
+      </datalist>
+      {isNew && (
+        <div class="field" style="min-height:36px">
+          <span class="t-footnote c-brand row gap4" style="gap:6px;padding:0 0 8px">
+            <Icon name="plus" size={14} stroke={2.6} />
+            New company, will be added to Companies
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
+
 // =================== Contact ===================
 export function openContactForm(existing?: Contact, defaults: Partial<Contact> = {}) {
   openForm(existing ? "Edit contact" : "New contact", (bind) => <ContactForm bind={bind} existing={existing} defaults={defaults} />);
@@ -74,7 +112,7 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
     email: c.email ?? "",
     phone: c.phone ?? "",
     jobTitle: c.jobTitle ?? "",
-    companyId: c.companyId ?? "",
+    companyName: "",
     status: c.status ?? "new",
     paymentTerms: c.paymentTerms ?? "immediate",
     priority: c.priority ?? "",
@@ -92,7 +130,10 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
   const [tagIds, setTagIds] = useState<string[] | null>(null);
   const set = (k: keyof typeof f) => (v: string) => setF((p) => ({ ...p, [k]: v }));
 
-  const companies = useLive(() => db.companies.orderBy("name").toArray(), []);
+  // Prefill the company name when editing (or when opened from a company page).
+  const [companyTouched, setCompanyTouched] = useState(false);
+  const initialCompany = useLive(async () => (c.companyId ? (await db.companies.get(c.companyId))?.name ?? "" : ""), [c.companyId]);
+  const companyName = companyTouched ? f.companyName : initialCompany ?? "";
   const leadTypes = useLive(() => db.leadTypes.orderBy("position").toArray(), []);
   const tags = useLive(() => db.tags.orderBy("name").toArray(), []);
   const currentTags = useLive(
@@ -119,7 +160,7 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
         email: optText(f.email),
         phone: optText(f.phone),
         jobTitle: optText(f.jobTitle),
-        companyId: f.companyId || undefined,
+        companyId: companyTouched || initialCompany !== undefined ? await resolveCompany(companyName) : c.companyId,
         status: f.status as Contact["status"],
         priority: (f.priority || undefined) as Contact["priority"],
         paymentTerms: f.paymentTerms as Contact["paymentTerms"],
@@ -148,7 +189,13 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
         <TextField label="Email" value={f.email} onInput={set("email")} type="email" inputMode="email" />
         <TextField label="Phone" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" />
         <TextField label="Job title" value={f.jobTitle} onInput={set("jobTitle")} />
-        <SelectField label="Company" value={f.companyId} onChange={set("companyId")} options={(companies ?? []).map((x) => ({ value: x.id, label: x.name }))} />
+        <CompanyField
+          value={companyName}
+          onInput={(v) => {
+            setCompanyTouched(true);
+            set("companyName")(v);
+          }}
+        />
       </Group>
       <Group label="Lead">
         <SelectField label="Status" value={f.status} placeholder={false} onChange={set("status")} options={CONTACT_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))} />
@@ -278,7 +325,7 @@ function DealForm({ bind, existing, defaults }: { bind: Binding; existing?: Deal
     currency: d.currency ?? "PKR",
     stageId: d.stageId ?? "",
     contactId: d.contactId ?? "",
-    companyId: d.companyId ?? "",
+    companyName: "",
     expectedCloseDate: d.expectedCloseDate ?? "",
     description: d.description ?? "",
   });
@@ -288,7 +335,9 @@ function DealForm({ bind, existing, defaults }: { bind: Binding; existing?: Deal
     return pid ? db.stages.where("pipelineId").equals(pid).sortBy("position") : ([] as Stage[]);
   }, []);
   const contacts = useLive(() => db.contacts.orderBy("name").toArray(), []);
-  const companies = useLive(() => db.companies.orderBy("name").toArray(), []);
+  const [companyTouched, setCompanyTouched] = useState(false);
+  const initialCompany = useLive(async () => (d.companyId ? (await db.companies.get(d.companyId))?.name ?? "" : ""), [d.companyId]);
+  const companyName = companyTouched ? f.companyName : initialCompany ?? "";
   const stageId = f.stageId || stages?.[0]?.id || "";
 
   bind.current = async () => {
@@ -296,7 +345,7 @@ function DealForm({ bind, existing, defaults }: { bind: Binding; existing?: Deal
     if (!name) return fail("Name is required");
     if (!stageId) return fail("Pick a stage");
     const stage = stages!.find((s) => s.id === stageId)!;
-    let companyId = f.companyId || undefined;
+    let companyId = companyTouched || initialCompany !== undefined ? await resolveCompany(companyName) : d.companyId;
     if (!companyId && f.contactId) companyId = (await db.contacts.get(f.contactId))?.companyId;
     const id = await saveDeal({
       id: existing?.id,
@@ -324,7 +373,13 @@ function DealForm({ bind, existing, defaults }: { bind: Binding; existing?: Deal
       </Group>
       <Group label="Related">
         <SelectField label="Contact" value={f.contactId} onChange={set("contactId")} options={(contacts ?? []).map((x) => ({ value: x.id, label: x.name }))} />
-        <SelectField label="Company" value={f.companyId} onChange={set("companyId")} options={(companies ?? []).map((x) => ({ value: x.id, label: x.name }))} />
+        <CompanyField
+          value={companyName}
+          onInput={(v) => {
+            setCompanyTouched(true);
+            set("companyName")(v);
+          }}
+        />
       </Group>
       <Group>
         <TextArea label="Description" value={f.description} onInput={set("description")} />
@@ -712,11 +767,7 @@ function LeadForm({ bind, defaults }: { bind: Binding; defaults: { stageId?: str
     if (mode === "new") {
       const name = optText(f.name);
       if (!name) return fail("Name is required");
-      const companyName = optText(f.company);
-      if (companyName) {
-        const hit = await db.companies.filter((c) => c.name.trim().toLowerCase() === companyName.toLowerCase()).first();
-        companyId = hit?.id ?? (await saveCompany({ name: companyName }));
-      }
+      companyId = await resolveCompany(f.company);
       contactId = await saveContact({
         name,
         phone: optText(f.phone),
@@ -760,7 +811,7 @@ function LeadForm({ bind, defaults }: { bind: Binding; defaults: { stageId?: str
         <Group footer="Enter the number as you'd dial it (e.g. 0300 1234567). WhatsApp opens with it directly.">
           <TextField label="Name" value={f.name} onInput={set("name")} placeholder="Required" autoFocus />
           <TextField label="Phone" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" placeholder="0300 1234567" />
-          <TextField label="Company" value={f.company} onInput={set("company")} />
+          <CompanyField value={f.company} onInput={set("company")} />
           <SelectField label="Pays" value={f.paymentTerms} placeholder={false} onChange={set("paymentTerms")} options={[{ value: "immediate", label: "Immediately" }, { value: "credit", label: "On credit" }]} />
         </Group>
       ) : (
