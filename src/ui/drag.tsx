@@ -21,6 +21,8 @@ export interface DropZone {
 interface DragState {
   itemId: string;
   zones: DropZone[];
+  /** Show the bottom dock of targets (horizontal boards). Vertical boards drop onto their stage sections instead. */
+  dock: boolean;
   currentZone?: string;
   over?: string;
   onDrop: (zoneId: string) => void;
@@ -30,7 +32,19 @@ let active: DragState | null = null;
 const subs = new Set<() => void>();
 const notify = () => subs.forEach((s) => s());
 
+/** Re-renders when a drag starts/ends or the finger moves over a different target. */
+export function useDragOver(): { dragging: boolean; over?: string; from?: string } {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const s = () => force((n) => n + 1);
+    subs.add(s);
+    return () => void subs.delete(s);
+  }, []);
+  return { dragging: !!active, over: active?.over, from: active?.currentZone };
+}
+
 const HOLD_MS = 350;
+const EDGE = 110; // px from the top/bottom where auto-scroll kicks in
 const SLOP = 10;
 
 interface Gesture {
@@ -44,6 +58,7 @@ interface Gesture {
   avatar?: HTMLElement;
   dx: number;
   dy: number;
+  raf?: number;
 }
 
 export function Draggable({
@@ -54,6 +69,7 @@ export function Draggable({
   onTap,
   children,
   class: cls,
+  dock = true,
 }: {
   itemId: string;
   zones: DropZone[];
@@ -62,12 +78,13 @@ export function Draggable({
   onTap: () => void;
   children: ComponentChildren;
   class?: string;
+  dock?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const g = useRef<Gesture | null>(null);
   const suppressClick = useRef(false);
-  const latest = useRef({ itemId, zones, currentZone, onDrop });
-  latest.current = { itemId, zones, currentZone, onDrop };
+  const latest = useRef({ itemId, zones, currentZone, onDrop, dock });
+  latest.current = { itemId, zones, currentZone, onDrop, dock };
   const [lifting, setLifting] = useState(false);
   const [ghost, setGhost] = useState(false);
 
@@ -90,9 +107,36 @@ export function Draggable({
     document.body.appendChild(av);
     s.avatar = av;
     setGhost(true);
-    const { itemId: id, zones: z, currentZone: cz, onDrop: od } = latest.current;
-    active = { itemId: id, zones: z, currentZone: cz, onDrop: od };
+    const { itemId: id, zones: z, currentZone: cz, onDrop: od, dock: dk } = latest.current;
+    active = { itemId: id, zones: z, currentZone: cz, onDrop: od, dock: dk };
     notify();
+    autoScroll();
+  };
+
+  // While lifted, scroll the screen when the finger is near the top or bottom
+  // edge, so a card can be dragged to a stage that's off-screen.
+  const autoScroll = () => {
+    const s = g.current;
+    if (!s || !s.dragging) return;
+    const scroller = ref.current?.closest<HTMLElement>(".screen");
+    const h = window.innerHeight;
+    let v = 0;
+    if (s.y < EDGE) v = -Math.ceil(((EDGE - s.y) / EDGE) * 14);
+    else if (s.y > h - EDGE) v = Math.ceil(((s.y - (h - EDGE)) / EDGE) * 14);
+    if (v && scroller) {
+      scroller.scrollTop += v;
+      hitTest(s.x, s.y);
+    }
+    s.raf = requestAnimationFrame(autoScroll);
+  };
+
+  const hitTest = (x: number, y: number) => {
+    const hit = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-zone]");
+    const over = hit?.dataset.zone;
+    if (active && active.over !== over) {
+      active.over = over;
+      notify();
+    }
   };
 
   const track = (x: number, y: number) => {
@@ -111,12 +155,7 @@ export function Draggable({
       s.avatar.style.left = `${x - s.dx}px`;
       s.avatar.style.top = `${y - s.dy}px`;
     }
-    const hit = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-zone]");
-    const over = hit?.dataset.zone;
-    if (active && active.over !== over) {
-      active.over = over;
-      notify();
-    }
+    hitTest(x, y);
   };
 
   const finish = (drop: boolean) => {
@@ -124,6 +163,7 @@ export function Draggable({
     g.current = null;
     if (!s) return;
     clearTimeout(s.timer);
+    if (s.raf) cancelAnimationFrame(s.raf);
     setLifting(false);
     if (!s.dragging) return;
     suppressClick.current = true; // the click that follows a drag isn't a tap
@@ -215,7 +255,7 @@ export function DropDock() {
     subs.add(s);
     return () => void subs.delete(s);
   }, []);
-  if (!active) return null;
+  if (!active || !active.dock) return null;
   return (
     <div class="drop-dock" aria-hidden="true">
       {active.zones.map((z) => (

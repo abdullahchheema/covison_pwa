@@ -1,7 +1,7 @@
 // Deals kanban for a phone: one full-width page per stage (swipe between
 // them), a stage strip with counts and totals, long-press drag onto a stage
 // dock, plus a "Move to…" sheet as the accessible fallback.
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useMemo, useState } from "preact/hooks";
 import { db, type Deal, type Stage } from "../db/schema";
 import { dealReceived, defaultPipelineId, deleteDeal, moveDeal } from "../db/repo";
 import { exportCsv } from "../db/csvExport";
@@ -11,8 +11,9 @@ import { back, navigate } from "../lib/router";
 import { Icon } from "../ui/icons";
 import { Avatar, Badge, Empty, Group, Row, Screen, SearchField, useDebounced } from "../ui/kit";
 import { actionSheet, toast } from "../ui/overlay";
-import { openWhatsApp, waHref } from "../lib/whatsapp";
+import { openWhatsApp, waHref, waLinkProps } from "../lib/whatsapp";
 import { Draggable } from "../ui/drag";
+import { StageSection } from "../ui/board";
 import { openDealForm, openLeadForm, openTransactionForm } from "./forms";
 import { openDealPaymentForm, openWonForm } from "./moneyForms";
 import { TaskSection, Timeline, confirmDelete } from "./shared";
@@ -73,9 +74,6 @@ export function Pipeline() {
   const board = useLive(loadBoard, []);
   const [q, setQ] = useState("");
   const query = useDebounced(q.trim().toLowerCase());
-  const [page, setPage] = useState(0);
-  const pager = useRef<HTMLDivElement>(null);
-  const strip = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() => {
     if (!board) return [];
@@ -99,28 +97,6 @@ export function Pipeline() {
     return { n: open.length, v: open.reduce((a, d) => a + (d.value || 0), 0) };
   }, [board]);
 
-  // Keep the stage strip in sync with the swiped page.
-  useEffect(() => {
-    const el = pager.current;
-    if (!el) return;
-    const onScroll = () => {
-      const w = (el.firstElementChild as HTMLElement | null)?.offsetWidth ?? el.clientWidth;
-      const p = Math.round(el.scrollLeft / (w + 12));
-      setPage((old) => (old === p ? old : p));
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [board?.stages.length]);
-  useEffect(() => {
-    strip.current?.children[page]?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-  }, [page]);
-
-  const goTo = (i: number) => {
-    const el = pager.current;
-    const pane = el?.children[i] as HTMLElement | undefined;
-    if (el && pane) el.scrollTo({ left: pane.offsetLeft - 16, behavior: "smooth" });
-  };
-
   const zones = (board?.stages ?? []).map((s) => ({ id: s.id, label: s.name, sub: `${byStage.get(s.id)?.length ?? 0}` }));
 
   return (
@@ -142,7 +118,7 @@ export function Pipeline() {
           >
             <Icon name="more" size={24} />
           </button>
-          <button class="nav-btn" aria-label="New lead" onClick={() => openLeadForm(board?.stages[page] ? { stageId: board.stages[page].id } : {})}>
+          <button class="nav-btn" aria-label="New lead" onClick={() => openLeadForm()}>
             <Icon name="plus" size={26} />
           </button>
         </>
@@ -157,41 +133,36 @@ export function Pipeline() {
         <Empty icon="pipeline" title="No stages" text="Add stages to start tracking deals." action={<button class="btn primary sm" onClick={() => navigate("/pipeline/stages")}>Edit stages</button>} />
       ) : (
         <>
-          <div class="stage-strip" ref={strip}>
-            {board.stages.map((s, i) => {
-              const ds = byStage.get(s.id) ?? [];
-              return (
-                <button key={s.id} class="chip press" aria-pressed={page === i} onClick={() => goTo(i)}>
-                  {s.name}
-                  <span class="count">{ds.length}</span>
-                </button>
-              );
-            })}
-          </div>
-          <div class="pager" ref={pager}>
+          <p class="t-footnote c3" style="padding:0 20px">Hold a deal, then drag it up or down to another stage.</p>
+          <div class="content">
             {board.stages.map((s) => {
               const ds = byStage.get(s.id) ?? [];
               const total = ds.reduce((a, d) => a + (d.value || 0), 0);
               return (
-                <section class="pane" key={s.id} aria-label={s.name}>
-                  <div class="pane-head">
-                    <div class="row gap8">
-                      <Badge tone={stageTone(s)} dot>
-                        {s.name}
-                      </Badge>
-                      {s.probability !== undefined && <span class="t-footnote c3">{s.probability}%</span>}
-                    </div>
-                    <span class="t-subhead c2 num">{money(total, undefined, true)}</span>
-                  </div>
-                  <div class="pane-body">
-                    {ds.length === 0 ? (
-                      <button class="t-subhead c3 press" style="padding:28px 8px;text-align:center" onClick={() => openLeadForm({ stageId: s.id })}>
-                        No leads here. Tap to add one, or long-press a deal in another stage to move it.
-                      </button>
+                <StageSection
+                  key={s.id}
+                  id={s.id}
+                  count={ds.length}
+                  limit={s.isWon || s.isLost ? 4 : undefined}
+                  head={
+                    <Badge tone={stageTone(s)} dot>
+                      {s.name}
+                    </Badge>
+                  }
+                  right={total > 0 ? <span class="t-subhead c2 num">{money(total, undefined, true)}</span> : undefined}
+                  empty={
+                    s.isWon ? (
+                      "Won deals land here."
                     ) : (
-                      ds.map((d, i) => (
-                        <div key={d.id} class="rise" style={{ "--i": i } as never}>
-                          <Draggable itemId={d.id} zones={zones} currentZone={d.stageId} onTap={() => navigate(`/deals/${d.id}`)} onDrop={async (z) => {
+                      <button class="c3" onClick={() => openLeadForm({ stageId: s.id })}>
+                        No leads here. Tap to add one.
+                      </button>
+                    )
+                  }
+                >
+                  {ds.map((d, i) => (
+                    <div key={d.id} class="rise" style={{ "--i": i } as never}>
+                          <Draggable dock={false} itemId={d.id} zones={zones} currentZone={d.stageId} onTap={() => navigate(`/deals/${d.id}`)} onDrop={async (z) => {
                             await moveDealTo(d.id, z);
                           }}>
                             <div class="row between" style="align-items:flex-start">
@@ -254,20 +225,13 @@ export function Pipeline() {
                               )}
                             </div>
                           </Draggable>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </section>
+                    </div>
+                  ))}
+                </StageSection>
               );
             })}
           </div>
-          <div class="dots" aria-hidden="true">
-            {board.stages.map((s, i) => (
-              <span key={s.id} class={i === page ? "on" : ""} />
-            ))}
-          </div>
-          <p class="t-footnote c3" style="text-align:center;padding:10px 24px 0">Hold a deal to drag it to another stage</p>
+
         </>
       )}
     </Screen>
@@ -355,7 +319,7 @@ export function DealDetail({ id }: { id: string }) {
         </div>
 
         {contact && waHref(contact.phone) && (
-          <a class="btn wa block press mt12" href={waHref(contact.phone)}>
+          <a class="btn wa block press mt12" {...waLinkProps(contact.phone)}>
             <Icon name="whatsapp" size={20} />
             WhatsApp {contact.name.split(" ")[0]}
           </a>

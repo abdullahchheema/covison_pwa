@@ -6,7 +6,7 @@ import { deleteLedgerEntry, deletePayment, restoreSnapshot, saveLedgerEntry, set
 import { useCountUp, useLive, useStoredState } from "../lib/hooks";
 import { money, shortDate } from "../lib/format";
 import { back, navigate, switchTab } from "../lib/router";
-import { waHref } from "../lib/whatsapp";
+import { openWhatsApp, waHref, waLinkProps } from "../lib/whatsapp";
 import { telHref } from "../lib/sanitize";
 import { Icon } from "../ui/icons";
 import { Avatar, Badge, Empty, Group, Row, Screen, Segmented, SkeletonList, SwipeRow } from "../ui/kit";
@@ -95,7 +95,7 @@ function EntryRow({ x, i }: { x: EntryWithBalance; i: number }) {
     <SwipeRow
       i={i}
       actions={[
-        ...(wa && !e.settledAt ? [{ label: "WhatsApp", icon: "whatsapp" as const, tone: "success" as const, run: () => (location.href = wa) }] : []),
+        ...(wa && !e.settledAt ? [{ label: "WhatsApp", icon: "whatsapp" as const, tone: "success" as const, run: () => void openWhatsApp(e.phone, reminderText(e, x.balance)) }] : []),
         {
           label: "Delete",
           icon: "trash",
@@ -345,7 +345,7 @@ export function LedgerDetail({ id }: { id: string }) {
               {inbound ? "Payment received" : "Payment made"}
             </button>
             {wa && (
-              <a class="btn wa press" href={wa} aria-label="WhatsApp">
+              <a class="btn wa press" {...waLinkProps(e.phone, reminderText(e, x.balance))} aria-label="WhatsApp">
                 <Icon name="whatsapp" size={20} />
                 {inbound ? "Remind" : "Chat"}
               </a>

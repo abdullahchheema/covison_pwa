@@ -125,8 +125,7 @@ test("works fully offline after first load (airplane mode)", async ({ page, cont
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   // Create a contact while offline
   await page.goto("./#/contacts");
-  await page.getByRole("button", { name: "Create" }).click();
-  await page.getByRole("dialog").last().getByRole("button", { name: "New contact", exact: true }).click();
+  await page.locator(".fab").click(); // on Contacts the + opens New contact directly
   await page.getByLabel("Name").fill("Offline Olivia");
   await page.getByRole("dialog").last().getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Offline Olivia" })).toBeVisible();
@@ -330,7 +329,9 @@ test("money: Home balances and owed split, WhatsApp, loan repayment into an acco
   // WhatsApp opens the chat directly with the number in international format
   await page.goto("./#/contacts");
   await page.getByText("Amara Okafor", { exact: true }).click();
-  await expect(page.locator("a.qa.wa")).toHaveAttribute("href", "whatsapp://send?phone=923001234510");
+  // Default: regular WhatsApp via the official wa.me link (opens outside the app)
+  await expect(page.locator("a.qa.wa")).toHaveAttribute("href", "https://wa.me/923001234510");
+  await expect(page.locator("a.qa.wa")).toHaveAttribute("target", "_blank");
 
   // Loan repayment goes into an account and raises its balance
   await page.goto("./#/money");
@@ -351,8 +352,7 @@ test("money: Home balances and owed split, WhatsApp, loan repayment into an acco
 test("contact form: typing a new company adds it to Companies, an existing one is reused", async ({ page }) => {
   await page.goto("./#/contacts");
   const addContact = async (name: string, company: string) => {
-    await page.getByRole("button", { name: "Create" }).click();
-    await page.getByRole("dialog").last().getByRole("button", { name: "New contact", exact: true }).click();
+    await page.locator(".fab").click(); // on Contacts the + opens New contact directly
     const sheet = page.getByRole("dialog").last();
     await sheet.getByLabel("Name", { exact: true }).fill(name);
     await sheet.getByLabel("Company", { exact: true }).fill(company);
@@ -385,8 +385,7 @@ test("iPhone contacts: bulk .vcf import skips people you already have", async ({
 
   // Hamza already exists in the CRM (same mobile)
   await page.goto("./#/contacts");
-  await page.getByRole("button", { name: "Create" }).click();
-  await page.getByRole("dialog").last().getByRole("button", { name: "New contact", exact: true }).click();
+  await page.locator(".fab").click(); // on Contacts the + opens New contact directly
   const form = page.getByRole("dialog").last();
   await expect(form.getByRole("button", { name: "From iPhone contacts" })).toHaveCount(0); // picker button removed
   await form.getByLabel("Name", { exact: true }).fill("Hamza Iqbal");
@@ -409,7 +408,7 @@ test("iPhone contacts: bulk .vcf import skips people you already have", async ({
 
 async function addAccount(page: Page, name: string, kind: "Bank" | "Wallet" | "Cash", scope: "Business" | "Personal", balance: string) {
   await page.goto("./#/money");
-  await page.getByRole("button", { name: "Add money entry" }).click();
+  await page.locator(".screen.current .navbar [aria-label=\"Add money entry\"]").click();
   await page.getByRole("dialog").last().getByRole("button", { name: "Add account", exact: true }).click();
   const s = page.getByRole("dialog").last();
   await s.getByLabel("Name", { exact: true }).fill(name);
@@ -426,7 +425,7 @@ test("won flow: popup creates project, agreed total optional, advance into an ac
 
   // Lead with no amount
   await page.goto("./#/pipeline");
-  await page.getByRole("button", { name: "New lead" }).click();
+  await page.getByRole("button", { name: "New lead" }).first().click();
   const lead = page.getByRole("dialog").last();
   await lead.getByLabel("Name", { exact: true }).fill("Faisal Ahmed");
   await lead.getByLabel("Mobile").fill("0333 4445556");
@@ -543,7 +542,7 @@ test("cash flow: add personal expense and business income, month totals update",
 
 test("pipeline is Lead → Negotiation → Won; older installs are migrated without losing deals", async ({ page }) => {
   await page.goto("./#/pipeline");
-  await expect(page.locator(".stage-strip .chip")).toHaveText([/Lead/, /Negotiation/, /Won/]);
+  await expect(page.locator(".screen.current .stage-sec-head")).toHaveText([/Lead/, /Negotiation/, /Won/]);
   // Simulate an old install: old default stages with deals in them, then restart.
   await page.evaluate(async () => {
     const db: IDBDatabase = await new Promise((res) => {
@@ -567,7 +566,7 @@ test("pipeline is Lead → Negotiation → Won; older installs are migrated with
     db.close();
   });
   await page.reload();
-  await expect(page.locator(".stage-strip .chip")).toHaveText([/Lead\s*1/, /Negotiation\s*1/, /Won/]);
+  await expect(page.locator(".screen.current .stage-sec-head")).toHaveText([/Lead\s*1/, /Negotiation\s*1/, /Won\s*0/]);
   const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
   const name = (id: unknown) => db.stages.find((s) => s.id === id)?.name;
   expect(name(db.deals.find((d) => d.id === "dq")!.stageId)).toBe("Lead");
@@ -577,7 +576,7 @@ test("pipeline is Lead → Negotiation → Won; older installs are migrated with
 
 test("lead form asks only name, mobile, company, position; company is created", async ({ page }) => {
   await page.goto("./#/pipeline");
-  await page.getByRole("button", { name: "New lead" }).click();
+  await page.getByRole("button", { name: "New lead" }).first().click();
   const lead = page.getByRole("dialog").last();
   await expect(lead.locator(".field label")).toHaveText(["Name", "Mobile", "Company", "Position"]);
   await lead.getByLabel("Name", { exact: true }).fill("Sara Javed");
@@ -596,7 +595,7 @@ test("lead form asks only name, mobile, company, position; company is created", 
 test("projects: won lead appears as Not started; status, money received and expenses", async ({ page }) => {
   await addAccount(page, "Meezan Bank", "Bank", "Business", "50000");
   await page.goto("./#/pipeline");
-  await page.getByRole("button", { name: "New lead" }).click();
+  await page.getByRole("button", { name: "New lead" }).first().click();
   const lead = page.getByRole("dialog").last();
   await lead.getByLabel("Name", { exact: true }).fill("Bilal Store");
   await lead.getByRole("button", { name: "Save", exact: true }).click();
@@ -609,7 +608,7 @@ test("projects: won lead appears as Not started; status, money received and expe
   await expect(page.getByText("Project created")).toBeVisible();
 
   await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Projects" }).click();
-  await expect(page.locator('[data-stage="not_started"]')).toContainText("Bilal Store app");
+  await expect(page.locator('.screen.current section[data-zone="not_started"]')).toContainText("Bilal Store app");
   await page.locator(".screen.current").getByText("Bilal Store app").first().click();
   await page.getByRole("button", { name: "In progress", exact: true }).click();
 
@@ -718,7 +717,8 @@ async function touchDrag(page: Page, cardText: string, zoneId: string) {
     el.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, cancelable: true, touches: [t], changedTouches: [t] }));
   }, [x, y]);
   await page.waitForTimeout(500); // hold → the card lifts and the dock appears
-  const zone = page.locator(`.drop-dock [data-zone="${zoneId}"]`);
+  // Vertical boards: drop onto the stage section itself (its header).
+  const zone = page.locator(`.screen.current section[data-zone="${zoneId}"] .stage-sec-head`);
   await expect(zone).toBeVisible();
   const z = (await zone.boundingBox())!;
   await card.evaluate(async (el, [x0, y0, x1, y1]) => {
@@ -736,7 +736,7 @@ async function touchDrag(page: Page, cardText: string, zoneId: string) {
 
 test("touch drag: lead moves between pipeline stages; project moves between project stages", async ({ page }) => {
   await page.goto("./#/pipeline");
-  await page.getByRole("button", { name: "New lead" }).click();
+  await page.getByRole("button", { name: "New lead" }).first().click();
   const lead = page.getByRole("dialog").last();
   await lead.getByLabel("Name", { exact: true }).fill("Drag Me Ltd");
   await lead.getByRole("button", { name: "Save", exact: true }).click();
@@ -756,12 +756,11 @@ test("touch drag: lead moves between pipeline stages; project moves between proj
   await np.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Drag project" })).toBeVisible(); // the new project opens
   await page.goto("./#/projects");
-  await page.locator(".screen.current .stage-strip .chip", { hasText: "Not started" }).click();
   await page.waitForTimeout(500);
-  await touchDrag(page, "Drag project", "completed");
-  await expect(page.getByText("Drag project: Completed")).toBeVisible();
+  await touchDrag(page, "Drag project", "in_progress");
+  await expect(page.getByText("Drag project: In progress")).toBeVisible();
   db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
-  expect(db.projects.find((p) => p.name === "Drag project")!.status).toBe("completed");
+  expect(db.projects.find((p) => p.name === "Drag project")!.status).toBe("in_progress");
   // No to-dos on the project page anymore
   await page.goto(`./#/projects/${db.projects.find((p) => p.name === "Drag project")!.id}`);
   await expect(page.getByText("To-dos")).toHaveCount(0);
@@ -769,10 +768,62 @@ test("touch drag: lead moves between pipeline stages; project moves between proj
 
 test("contact form is short by default; More details reveals the rest", async ({ page }) => {
   await page.goto("./#/contacts");
-  await page.getByRole("button", { name: "Create" }).click();
-  await page.getByRole("dialog").last().getByRole("button", { name: "New contact", exact: true }).click();
+  await page.locator(".fab").click(); // on Contacts the + opens New contact directly
   const f = page.getByRole("dialog").last();
   await expect(f.locator(".field label")).toHaveText(["Name", "Mobile", "Company", "Position"]);
   await f.getByRole("button", { name: /More details/ }).click();
   await expect(f.getByLabel("Email")).toBeVisible();
+});
+
+test("+ button matches the screen; toasts and the backup warning swipe away upward", async ({ page }) => {
+  await addSampleData(page);
+  // Pipeline: straight to New lead
+  await page.goto("./#/pipeline");
+  await page.locator(".fab").click();
+  await expect(page.getByRole("dialog").last()).toContainText("New lead");
+  await page.getByRole("dialog").last().getByRole("button", { name: "Cancel" }).click();
+  // Money → Owed: only loan / credit choices
+  await page.goto("./#/money");
+  await page.getByRole("button", { name: "Owed", exact: true }).click();
+  await page.locator(".fab").click();
+  const sheet = page.getByRole("dialog").last();
+  await expect(sheet.locator(".action")).toHaveText([/Loan given/, /Loan taken/, /Client credit/, /Cancel/]);
+  await sheet.getByRole("button", { name: "Cancel" }).click();
+
+  // Backup warning on Home: swipe up hides it (for 3 days)
+  await page.goto("./#/");
+  const banner = page.locator(".screen.current .banner", { hasText: "Time for a backup" });
+  await expect(banner).toBeVisible();
+  await banner.evaluate(async (el) => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + 40;
+    let y = r.top + r.height / 2;
+    const t = (yy: number) => new Touch({ identifier: 3, target: el, clientX: x, clientY: yy });
+    el.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, cancelable: true, touches: [t(y)], changedTouches: [t(y)] }));
+    for (let i = 0; i < 8; i++) {
+      y -= 12;
+      el.dispatchEvent(new TouchEvent("touchmove", { bubbles: true, cancelable: true, touches: [t(y)], changedTouches: [t(y)] }));
+      await new Promise((r2) => setTimeout(r2, 12));
+    }
+    el.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true, touches: [], changedTouches: [t(y)] }));
+  });
+  await expect(page.getByText("Backup reminder hidden for 3 days")).toBeVisible();
+  await expect(banner).toHaveCount(0);
+
+  // A toast swipes away upward
+  const toastEl = page.locator(".toast-wrap").first();
+  await toastEl.evaluate(async (el) => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + 60;
+    let y = r.top + r.height / 2;
+    const t = (yy: number) => new Touch({ identifier: 4, target: el, clientX: x, clientY: yy });
+    el.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, cancelable: true, touches: [t(y)], changedTouches: [t(y)] }));
+    for (let i = 0; i < 6; i++) {
+      y -= 12;
+      el.dispatchEvent(new TouchEvent("touchmove", { bubbles: true, cancelable: true, touches: [t(y)], changedTouches: [t(y)] }));
+      await new Promise((r2) => setTimeout(r2, 12));
+    }
+    el.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true, touches: [], changedTouches: [t(y)] }));
+  });
+  await expect(page.locator(".toast-wrap")).toHaveCount(0, { timeout: 1500 });
 });

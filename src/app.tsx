@@ -20,7 +20,9 @@ import { LedgerDetail, MoneyScreen } from "./screens/Ledger";
 import { AccountDetail } from "./screens/Accounts";
 import { StagesScreen } from "./screens/Stages";
 import { NotFound } from "./screens/NotFound";
-import { openCompanyForm, openContactForm, openDealForm, openLeadForm, openLedgerForm, openNoteForm, openTaskForm, openTransactionForm } from "./screens/forms";
+import { openContactForm, openLeadForm, openLedgerForm, openTaskForm, openTransactionForm } from "./screens/forms";
+import { openAccountForm, openProjectEditForm, openTransferForm } from "./screens/moneyForms";
+import { navigate } from "./lib/router";
 
 const ROUTES: [string, (p: Record<string, string>) => JSX.Element][] = [
   ["/", () => <Dashboard />],
@@ -129,26 +131,72 @@ function TabBar() {
   );
 }
 
+function moneyTab(): "accounts" | "flow" | "owed" {
+  try {
+    const v = JSON.parse(localStorage.getItem("covison.money.tab") ?? '"accounts"');
+    return v === "flow" || v === "owed" ? v : "accounts";
+  } catch {
+    return "accounts";
+  }
+}
+
+/** The + button only offers what belongs to the screen you're on. */
 function Fab() {
   const route = useRoute();
   const show = ["/", "/contacts", "/pipeline", "/projects", "/money", "/tasks"].includes(route.path);
-  const open = () =>
-    actionSheet(
-      [
-        { label: "New lead", icon: "sparkles", run: () => openLeadForm() },
-        { label: "Add expense", icon: "arrowUpRight", run: () => openTransactionForm(undefined, { type: "expense" }) },
-        { label: "Add income", icon: "arrowDownLeft", run: () => openTransactionForm(undefined, { type: "income", scope: "business" }) },
-        { label: "Loan or credit (owed)", icon: "handshake", run: () => openLedgerForm() },
-        { label: "New contact", icon: "user", run: () => openContactForm() },
-        { label: "New deal", icon: "dollar", run: () => openDealForm() },
-        { label: "New task", icon: "tasks", run: () => openTaskForm() },
-        { label: "New company", icon: "building", run: () => openCompanyForm() },
-        { label: "Quick note", icon: "note", run: () => openNoteForm() },
-      ],
-      "Create",
-    );
+  const label = { "/": "Create", "/contacts": "New contact", "/pipeline": "New lead", "/projects": "New project", "/money": "Add money entry", "/tasks": "New task" }[route.path] ?? "Create";
+  const open = () => {
+    switch (route.path) {
+      case "/pipeline":
+        return openLeadForm();
+      case "/projects":
+        return openProjectEditForm(undefined, (id) => setTimeout(() => navigate(`/projects/${id}`), 320));
+      case "/contacts":
+        return openContactForm();
+      case "/tasks":
+        return openTaskForm();
+      case "/money": {
+        const tab = moneyTab();
+        if (tab === "accounts")
+          return actionSheet(
+            [
+              { label: "Add account", icon: "wallet", run: () => openAccountForm() },
+              { label: "Transfer between accounts", icon: "refresh", run: () => openTransferForm() },
+            ],
+            "Accounts",
+          );
+        if (tab === "flow")
+          return actionSheet(
+            [
+              { label: "Add expense", icon: "arrowUpRight", run: () => openTransactionForm(undefined, { type: "expense" }) },
+              { label: "Add income", icon: "arrowDownLeft", run: () => openTransactionForm(undefined, { type: "income", scope: "business" }) },
+            ],
+            "Cash flow",
+          );
+        return actionSheet(
+          [
+            { label: "Loan given (they owe me)", icon: "arrowUpRight", run: () => openLedgerForm(undefined, { kind: "loan", direction: "in" }) },
+            { label: "Loan taken (I owe them)", icon: "arrowDownLeft", run: () => openLedgerForm(undefined, { kind: "loan", direction: "out" }) },
+            { label: "Client credit (owes for work)", icon: "briefcase", run: () => openLedgerForm(undefined, { kind: "credit", direction: "in" }) },
+          ],
+          "Owed",
+        );
+      }
+      default:
+        // Home: the everyday shortcuts
+        return actionSheet(
+          [
+            { label: "New lead", icon: "sparkles", run: () => openLeadForm() },
+            { label: "Add expense", icon: "arrowUpRight", run: () => openTransactionForm(undefined, { type: "expense" }) },
+            { label: "Add income", icon: "arrowDownLeft", run: () => openTransactionForm(undefined, { type: "income", scope: "business" }) },
+            { label: "Loan given or taken", icon: "handshake", run: () => openLedgerForm(undefined, { kind: "loan" }) },
+          ],
+          "Create",
+        );
+    }
+  };
   return (
-    <button class={`fab press ${show ? "" : "hidden"}`} aria-label="Create" onClick={open} tabIndex={show ? 0 : -1}>
+    <button class={`fab press ${show ? "" : "hidden"}`} aria-label={label} onClick={open} tabIndex={show ? 0 : -1}>
       <Icon name="plus" size={28} stroke={2.6} />
     </button>
   );

@@ -1668,3 +1668,52 @@
 .tile.pstage.completed {
   background: linear-gradient(135deg, #149a68, #42d39a);
 }
+
+/* ============ Vertical boards ============ */
+.stage-sec {
+  margin-top: 14px;
+  padding: 10px;
+  border-radius: var(--r-2xl);
+  background: var(--surface-2);
+  box-shadow: var(--edge-hi);
+  transition: background-color 160ms, box-shadow 160ms, transform 260ms var(--ease-spring);
+}
+.stage-sec.droppable {
+  box-shadow: inset 0 0 0 1.5px var(--line), var(--edge-hi);
+}
+.stage-sec.drop-target {
+  background: var(--brand-soft);
+  box-shadow: inset 0 0 0 2px var(--brand);
+  transform: scale(1.01);
+}
+.stage-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 10px;
+}
+.stage-sec-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.stage-empty {
+  padding: 18px 8px;
+  text-align: center;
+  font-size: 15px;
+  color: var(--text-3);
+  border: 1.5px dashed var(--line);
+  border-radius: var(--r-xl);
+}
+.stage-sec.drop-target .stage-empty {
+  color: var(--brand);
+  border-color: var(--brand);
+}
+.toast-wrap {
+  pointer-events: auto;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  justify-content: center;
+  touch-action: none;
+}

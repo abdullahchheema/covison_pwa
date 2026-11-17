@@ -469,3 +469,83 @@ export function useDebounced<T>(value: T, ms = 120): T {
   }, [value, ms]);
   return v;
 }
+
+/**
+ * Wrap anything that should go away with an upward swipe (banners, toasts).
+ * Follows the finger upward with a little resistance downward; past ~40px
+ * (or a quick flick) it flies off and calls onDismiss. A tap still works.
+ */
+export function SwipeUpDismiss({ onDismiss, children, class: cls }: { onDismiss: () => void; children: ComponentChildren; class?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Keep the latest callback without re-attaching listeners: a parent that
+  // re-renders mid-swipe (count-up animations) must not reset the gesture.
+  const cb = useRef(onDismiss);
+  cb.current = onDismiss;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let y0 = 0;
+    let x0 = 0;
+    let t0 = 0;
+    let dy = 0;
+    let active = false;
+    let swiped = false;
+    const start = (e: TouchEvent) => {
+      y0 = e.touches[0].clientY;
+      x0 = e.touches[0].clientX;
+      t0 = performance.now();
+      dy = 0;
+      active = false;
+      swiped = false;
+      el.style.transition = "none";
+    };
+    const move = (e: TouchEvent) => {
+      const d = e.touches[0].clientY - y0;
+      const dx = e.touches[0].clientX - x0;
+      if (!active) {
+        if (d > -6 || Math.abs(dx) > Math.abs(d)) return; // only an upward swipe
+        active = true;
+      }
+      e.preventDefault();
+      dy = d < 0 ? d : d * 0.2;
+      el.style.transform = `translate3d(0, ${dy}px, 0)`;
+      el.style.opacity = String(Math.max(0.2, 1 + dy / 160));
+    };
+    const end = () => {
+      el.style.transition = "transform 280ms cubic-bezier(0.32,0.72,0,1), opacity 280ms";
+      const v = dy / Math.max(1, performance.now() - t0);
+      if (active && (dy < -40 || v < -0.45)) {
+        swiped = true;
+        el.style.transform = "translate3d(0, -140%, 0)";
+        el.style.opacity = "0";
+        setTimeout(() => cb.current(), 220);
+      } else {
+        el.style.transform = "";
+        el.style.opacity = "";
+      }
+    };
+    const click = (e: Event) => {
+      if (swiped) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    };
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchmove", move, { passive: false });
+    el.addEventListener("touchend", end);
+    el.addEventListener("touchcancel", end);
+    el.addEventListener("click", click, true);
+    return () => {
+      el.removeEventListener("touchstart", start);
+      el.removeEventListener("touchmove", move);
+      el.removeEventListener("touchend", end);
+      el.removeEventListener("touchcancel", end);
+      el.removeEventListener("click", click, true);
+    };
+  }, []);
+  return (
+    <div ref={ref} class={cls} style="will-change:transform">
+      {children}
+    </div>
+  );
+}

@@ -12,11 +12,11 @@ import { relativeTime, shortDate } from "../lib/format";
 import { optText } from "../lib/sanitize";
 import { navigate } from "../lib/router";
 import { Icon } from "../ui/icons";
-import { Group, Row, Screen, Segmented, TextField } from "../ui/kit";
+import { Group, Row, Screen, Segmented, SwipeUpDismiss, TextField } from "../ui/kit";
 import { actionSheet, confirmSheet, openSheet, toast } from "../ui/overlay";
 import { pickFile } from "./CsvImport";
 import { importVcfContacts } from "./forms";
-import { getCountryCode, setCountryCode } from "../lib/whatsapp";
+import { getCountryCode, getWaApp, setCountryCode, setWaApp, type WaApp } from "../lib/whatsapp";
 
 const DAY = 86400000;
 
@@ -40,29 +40,45 @@ const TABLE_LABELS: Record<string, string> = {
 
 function useBackupStatus() {
   return useLive(async () => {
-    const [last, contacts, deals, tasks] = await Promise.all([getMeta<string | null>("lastBackupAt", null), db.contacts.count(), db.deals.count(), db.tasks.count()]);
+    const [last, contacts, deals, tasks, snooze] = await Promise.all([
+      getMeta<string | null>("lastBackupAt", null),
+      db.contacts.count(),
+      db.deals.count(),
+      db.tasks.count(),
+      getMeta<string | null>("backupSnoozeUntil", null),
+    ]);
     const hasData = contacts + deals + tasks > 0;
     const stale = hasData && (!last || Date.now() - new Date(last).getTime() > 7 * DAY);
-    return { last, stale, hasData };
+    const snoozed = !!snooze && Date.now() < new Date(snooze).getTime();
+    return { last, stale, hasData, snoozed };
   }, []);
 }
 
 /** Gentle reminder when the last backup is older than 7 days. */
 export function BackupReminder({ compact }: { compact?: boolean }) {
   const s = useBackupStatus();
-  if (!s?.stale) return null;
-  return (
-    <button class="banner press-soft fade-in" style={{ width: "100%", textAlign: "left", marginBottom: compact ? "14px" : 0 }} onClick={() => navigate("/settings")}>
+  // On Home / More the warning can be swiped away; it comes back in 3 days if still no backup.
+  if (!s?.stale || (compact && s.snoozed)) return null;
+  const snooze = () => void setMeta("backupSnoozeUntil", new Date(Date.now() + 3 * DAY).toISOString()).then(() => toast("Backup reminder hidden for 3 days", { icon: "shield" }));
+  const banner = (
+    <div class="banner fade-in" style={{ width: "100%", marginBottom: compact ? "14px" : 0 }}>
       <Icon name="shield" size={22} class="b-ico" />
-      <span class="grow">
+      <button class="grow" style="text-align:left" onClick={() => navigate("/settings")}>
         <strong>Time for a backup</strong>
         <span class="t-footnote c2" style="display:block">
           {s.last ? `Last backup ${relativeTime(s.last)}.` : "You haven't backed up yet."} Your data lives only on this iPhone.
         </span>
-      </span>
-      <Icon name="chevronRight" size={18} class="c3" />
-    </button>
+      </button>
+      {compact ? (
+        <button class="c3" aria-label="Hide backup reminder" style="padding:6px;margin:-6px -4px -6px 0" onClick={snooze}>
+          <Icon name="x" size={18} />
+        </button>
+      ) : (
+        <Icon name="chevronRight" size={18} class="c3" />
+      )}
+    </div>
   );
+  return compact ? <SwipeUpDismiss onDismiss={snooze}>{banner}</SwipeUpDismiss> : banner;
 }
 
 async function doExport() {
@@ -252,6 +268,7 @@ export function SettingsScreen() {
   const name = useLive(() => getMeta<string>("displayName", ""), []);
   const persisted = useLive(() => getMeta<boolean | null>("persistGranted", null), []);
   const [theme, setTheme] = useState<ThemePref>(getThemePref());
+  const [waChoice, setWaChoice] = useState<WaApp>(getWaApp());
   const [usage, setUsage] = useState<string>("");
   const [version, setVersion] = useState<string>("");
 
@@ -282,6 +299,20 @@ export function SettingsScreen() {
 
         <Group label="Money & WhatsApp">
           <Row lead={<span class="tile green"><Icon name="wallet" size={16} /></span>} title="Currency" value="PKR (Rs)" chevron={false} />
+          <Row
+            onClick={() =>
+              actionSheet(
+                [
+                  { label: "WhatsApp", icon: "whatsapp", run: () => { setWaApp("whatsapp"); setWaChoice("whatsapp"); toast("Chats open in WhatsApp"); } },
+                  { label: "WhatsApp Business", icon: "briefcase", run: () => { setWaApp("business"); setWaChoice("business"); toast("Chats open in WhatsApp Business"); } },
+                ],
+                "Open chats in",
+              )
+            }
+            lead={<span class="tile green"><Icon name="whatsapp" size={16} /></span>}
+            title="Open chats in"
+            value={waChoice === "business" ? "WhatsApp Business" : "WhatsApp"}
+          />
           <Row
             onClick={() => openSheet((close) => <CountryCodeSheet close={close} />, { title: "WhatsApp country code" })}
             lead={<span class="tile green"><Icon name="whatsapp" size={16} /></span>}

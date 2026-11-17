@@ -384,3 +384,33 @@ These features are new in the PWA. They didn't exist in the web CRM.
   - "Add" on a contact asks: loan given, loan taken, or client credit.
 - **Open pipeline on Home:** open deals plus money agreed on won projects that hasn't been received yet.
 - **Contact form:** shows Name, Mobile, Company and Position by default. Everything else is behind "More details", which opens automatically when you edit a contact that already has extra details.
+
+### Vertical boards, context + button, swipe-up dismiss
+- **Pipeline and Projects are vertical.**
+  - Stages are stacked as sections, top to bottom.
+  - Hold a card (about 0.35 s) and drag it up or down. The stage under your finger lights up; let go to move the card there.
+  - Near the top or bottom edge the screen scrolls by itself, so you can reach stages that are off-screen.
+  - Won and Completed show the first 4 cards, with "Show all".
+  - The bottom drop dock is no longer used on these boards (`Draggable dock={false}`, sections carry `data-zone`).
+- **+ button by screen:**
+
+  | Screen | + button |
+  |---|---|
+  | Pipeline | New lead (opens straight away) |
+  | Projects | New project |
+  | Contacts | New contact |
+  | Tasks | New task |
+  | Money → Accounts | Add account, Transfer |
+  | Money → Cash flow | Expense, Income |
+  | Money → Owed | Loan given, Loan taken, Client credit |
+  | Home | New lead, Expense, Income, Loan |
+
+- **Swipe up to dismiss:**
+  - Toasts at the top can be swiped up.
+  - The "Time for a backup" warning on Home and More can be swiped up (or closed with ×) and stays hidden for 3 days. In Settings it always shows.
+  - The gesture survives screen re-renders, such as count-up animations.
+
+### WhatsApp app choice
+- **The problem:** iOS lets both WhatsApp and WhatsApp Business claim the `whatsapp://` link, and with both installed it opened Business.
+- **The fix:** chats now open through WhatsApp's official `https://wa.me/<number>` link by default, outside the app. Help pages (not official Apple or Meta docs) say iOS hands this link to regular WhatsApp first.
+- **Settings → Money & WhatsApp → "Open chats in":** WhatsApp (`wa.me`) or WhatsApp Business (`whatsapp://`).

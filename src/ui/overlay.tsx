@@ -4,6 +4,7 @@
 import type { ComponentChildren, JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { Icon, type IconName } from "./icons";
+import { SwipeUpDismiss } from "./kit";
 
 // ---------------- store ----------------
 type Listener = () => void;
@@ -67,21 +68,23 @@ function Toasts() {
   return (
     <div class="toasts" role="status" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} class={`toast ${t.tone === "error" ? "error" : ""} ${t.leaving ? "leaving" : ""}`}>
-          <Icon name={t.icon} size={20} class="t-ico" />
-          <span class="grow">{t.text}</span>
-          {t.action && (
-            <button
-              class="t-action press"
-              onClick={() => {
-                t.action!.run();
-                dismissToast(t.id);
-              }}
-            >
-              {t.action.label}
-            </button>
-          )}
-        </div>
+        <SwipeUpDismiss key={t.id} class="toast-wrap" onDismiss={() => dismissToast(t.id)}>
+          <div class={`toast ${t.tone === "error" ? "error" : ""} ${t.leaving ? "leaving" : ""}`}>
+            <Icon name={t.icon} size={20} class="t-ico" />
+            <span class="grow">{t.text}</span>
+            {t.action && (
+              <button
+                class="t-action press"
+                onClick={() => {
+                  t.action!.run();
+                  dismissToast(t.id);
+                }}
+              >
+                {t.action.label}
+              </button>
+            )}
+          </div>
+        </SwipeUpDismiss>
       ))}
     </div>
   );

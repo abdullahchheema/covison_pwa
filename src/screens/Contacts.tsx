@@ -14,7 +14,7 @@ import { importVcfContacts, openContactForm, openDealForm } from "./forms";
 import { Timeline, TaskSection, confirmDelete } from "./shared";
 import { openCsvImport } from "./CsvImport";
 import { ContactMoney } from "./Ledger";
-import { openWhatsApp, waHref } from "../lib/whatsapp";
+import { openWhatsApp, waHref, waLinkProps } from "../lib/whatsapp";
 
 interface Filters {
   status: string;
@@ -375,7 +375,7 @@ export function ContactDetail({ id }: { id: string }) {
             <Icon name="phone" size={22} />
             call
           </a>
-          <a class="qa wa press" href={waHref(c.phone)} aria-disabled={!waHref(c.phone)}>
+          <a class="qa wa press" {...waLinkProps(c.phone)} aria-disabled={!waHref(c.phone)}>
             <Icon name="whatsapp" size={22} />
             WhatsApp
           </a>

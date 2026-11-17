@@ -1,7 +1,7 @@
 // Projects: a board with three stages (Not started / In progress / Completed),
 // laid out like the deal pipeline — swipe between stages, long-press a card
 // and drag it onto another stage. Each project page shows its money.
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useMemo } from "preact/hooks";
 import { db, type ProjectStatus } from "../db/schema";
 import { deleteProject } from "../db/repo";
 import { STATUS_LABEL, STATUS_ORDER, loadProject, loadProjects, setProjectStatus, type ProjectMoney, type ProjectRow } from "../db/projects";
@@ -12,6 +12,7 @@ import { Icon, type IconName } from "../ui/icons";
 import { Avatar, Badge, Empty, Row, Screen, Segmented, SwipeRow } from "../ui/kit";
 import { actionSheet, toast } from "../ui/overlay";
 import { Draggable } from "../ui/drag";
+import { StageSection } from "../ui/board";
 import { openProjectEditForm, openProjectMoneyForm } from "./moneyForms";
 import { openTransactionForm } from "./forms";
 import { Timeline, confirmDelete } from "./shared";
@@ -88,9 +89,6 @@ function ProjectCard({ r }: { r: ProjectRow }) {
 
 export function ProjectsList() {
   const rows = useLive(loadProjects, []);
-  const [page, setPage] = useState(1); // open on "In progress"
-  const pager = useRef<HTMLDivElement>(null);
-  const strip = useRef<HTMLDivElement>(null);
   const by = useMemo(() => {
     const m = new Map<ProjectStatus, ProjectRow[]>(STATUS_ORDER.map((s) => [s, []]));
     (rows ?? []).forEach((r) => m.get(r.status)?.push(r));
@@ -98,31 +96,7 @@ export function ProjectsList() {
   }, [rows]);
   const active = (rows ?? []).filter((r) => r.status !== "completed");
   const totals = active.reduce((t, r) => ({ due: t.due + r.money.due, received: t.received + r.money.received, spent: t.spent + r.money.spent }), { due: 0, received: 0, spent: 0 });
-  const zones = STATUS_ORDER.map((s) => ({ id: s, label: STATUS_LABEL[s], sub: String(by.get(s)?.length ?? 0) }));
-  const ready = rows !== undefined && rows.length > 0;
-
-  useEffect(() => {
-    const el = pager.current;
-    if (!el) return;
-    // Start on "In progress" (the middle column).
-    const pane = el.children[1] as HTMLElement | undefined;
-    if (pane) el.scrollLeft = pane.offsetLeft - 16;
-    const onScroll = () => {
-      const w = (el.firstElementChild as HTMLElement | null)?.offsetWidth ?? el.clientWidth;
-      const p = Math.round(el.scrollLeft / (w + 12));
-      setPage((old) => (old === p ? old : p));
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [ready]);
-  useEffect(() => {
-    strip.current?.children[page]?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-  }, [page]);
-  const goTo = (i: number) => {
-    const el = pager.current;
-    const pane = el?.children[i] as HTMLElement | undefined;
-    if (el && pane) el.scrollTo({ left: pane.offsetLeft - 16, behavior: "smooth" });
-  };
+  const zones = STATUS_ORDER.map((s) => ({ id: s, label: STATUS_LABEL[s] }));
 
   return (
     <Screen
@@ -146,78 +120,60 @@ export function ProjectsList() {
           action={<button class="btn primary sm press" onClick={() => openProjectEditForm()}>New project</button>}
         />
       ) : (
-        <>
-          <div class="content">
-            <div class="money-cards" style="grid-template-columns:repeat(3,1fr)">
-              <div class="metric">
-                <span class="m-label">Still due</span>
-                <span class="m-value t-metric" style="font-size:18px">{money(totals.due, "PKR", totals.due >= 1_000_000)}</span>
-              </div>
-              <div class="metric">
-                <span class="m-label">Received</span>
-                <span class="m-value t-metric c-success" style="font-size:18px">{money(totals.received, "PKR", totals.received >= 1_000_000)}</span>
-              </div>
-              <div class="metric">
-                <span class="m-label">Spent</span>
-                <span class="m-value t-metric c-danger" style="font-size:18px">{money(totals.spent, "PKR", totals.spent >= 1_000_000)}</span>
-              </div>
+        <div class="content">
+          <div class="money-cards" style="grid-template-columns:repeat(3,1fr)">
+            <div class="metric">
+              <span class="m-label">Still due</span>
+              <span class="m-value t-metric" style="font-size:18px">{money(totals.due, "PKR", totals.due >= 1_000_000)}</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">Received</span>
+              <span class="m-value t-metric c-success" style="font-size:18px">{money(totals.received, "PKR", totals.received >= 1_000_000)}</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">Spent</span>
+              <span class="m-value t-metric c-danger" style="font-size:18px">{money(totals.spent, "PKR", totals.spent >= 1_000_000)}</span>
             </div>
           </div>
-          <div class="stage-strip mt16" ref={strip}>
-            {STATUS_ORDER.map((s, i) => (
-              <button key={s} class="chip press" aria-pressed={page === i} onClick={() => goTo(i)}>
-                {STATUS_LABEL[s]}
-                <span class="count">{by.get(s)?.length ?? 0}</span>
-              </button>
-            ))}
-          </div>
-          <div class="pager" ref={pager}>
-            {STATUS_ORDER.map((s) => {
-              const list = by.get(s) ?? [];
-              const due = list.reduce((t, r) => t + r.money.due, 0);
-              return (
-                <section class="pane" key={s} aria-label={STATUS_LABEL[s]}>
-                  <div class="pane-head">
-                    <Badge tone={STAGE_TONE[s]} dot>
-                      {STATUS_LABEL[s]}
-                    </Badge>
-                    {due > 0 && <span class="t-subhead c2 num">{money(due, "PKR", true)} due</span>}
+          <p class="t-footnote c3" style="padding:12px 4px 0">Hold a project, then drag it up or down to another stage.</p>
+          {STATUS_ORDER.map((s) => {
+            const list = by.get(s) ?? [];
+            const due = list.reduce((t, r) => t + r.money.due, 0);
+            return (
+              <StageSection
+                key={s}
+                id={s}
+                count={list.length}
+                limit={s === "completed" ? 4 : undefined}
+                head={
+                  <Badge tone={STAGE_TONE[s]} dot>
+                    {STATUS_LABEL[s]}
+                  </Badge>
+                }
+                right={due > 0 ? <span class="t-subhead c2 num">{money(due, "PKR", true)} due</span> : undefined}
+                empty={s === "not_started" ? "Won leads land here." : "Nothing here yet."}
+              >
+                {list.map((r, i) => (
+                  <div key={r.project.id} class="rise" style={{ "--i": i } as never}>
+                    <Draggable
+                      dock={false}
+                      itemId={r.project.id}
+                      zones={zones}
+                      currentZone={s}
+                      onTap={() => navigate(`/projects/${r.project.id}`)}
+                      onDrop={async (z) => {
+                        await setProjectStatus(r.project.id, z as ProjectStatus);
+                        toast(`${r.project.name}: ${STATUS_LABEL[z as ProjectStatus]}`, { icon: z === "completed" ? "checkCircle" : "arrowRight" });
+                      }}
+                    >
+                      <ProjectCard r={r} />
+                    </Draggable>
                   </div>
-                  <div class="pane-body" data-stage={s}>
-                    {list.length === 0 ? (
-                      <p class="t-subhead c3" style="padding:28px 8px;text-align:center">
-                        {s === "not_started" ? "Won leads land here." : "Nothing here. Hold a project and drag it to this stage."}
-                      </p>
-                    ) : (
-                      list.map((r, i) => (
-                        <div key={r.project.id} class="rise" style={{ "--i": i } as never}>
-                          <Draggable
-                            itemId={r.project.id}
-                            zones={zones}
-                            currentZone={s}
-                            onTap={() => navigate(`/projects/${r.project.id}`)}
-                            onDrop={async (z) => {
-                              await setProjectStatus(r.project.id, z as ProjectStatus);
-                              toast(`${r.project.name}: ${STATUS_LABEL[z as ProjectStatus]}`, { icon: z === "completed" ? "checkCircle" : "arrowRight" });
-                            }}
-                          >
-                            <ProjectCard r={r} />
-                          </Draggable>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </section>
-              );
-            })}
-          </div>
-          <div class="dots" aria-hidden="true">
-            {STATUS_ORDER.map((s, i) => (
-              <span key={s} class={i === page ? "on" : ""} />
-            ))}
-          </div>
-          <p class="t-footnote c3" style="text-align:center;padding:10px 24px 0">Hold a project to drag it to another stage</p>
-        </>
+                ))}
+              </StageSection>
+            );
+          })}
+        </div>
       )}
     </Screen>
   );

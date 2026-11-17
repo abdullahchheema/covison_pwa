@@ -36,16 +36,55 @@ export function waNumber(phone: string | undefined): string | undefined {
   return digits.length >= 8 && digits.length <= 15 ? digits : undefined;
 }
 
-/** Deep link that opens WhatsApp straight into the chat, optionally with a draft message. */
+export type WaApp = "whatsapp" | "business";
+const APP_KEY = "covison.waApp";
+
+/**
+ * Which app chats open in. iOS lets both WhatsApp and WhatsApp Business claim
+ * the `whatsapp://` scheme, and when both are installed it often picks
+ * Business. The official `https://wa.me/` link is a universal link that iOS
+ * hands to regular WhatsApp first (with an "open in Business" option), so it
+ * is the default. "business" keeps the `whatsapp://` scheme.
+ */
+export function getWaApp(): WaApp {
+  try {
+    return localStorage.getItem(APP_KEY) === "business" ? "business" : "whatsapp";
+  } catch {
+    return "whatsapp";
+  }
+}
+export function setWaApp(app: WaApp) {
+  try {
+    localStorage.setItem(APP_KEY, app);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Link that opens the chat with this number, optionally with a draft message. */
 export function waHref(phone: string | undefined, text?: string): string | undefined {
   const n = waNumber(phone);
   if (!n) return undefined;
-  return `whatsapp://send?phone=${n}${text ? `&text=${encodeURIComponent(text)}` : ""}`;
+  const t = text ? encodeURIComponent(text) : "";
+  return getWaApp() === "business" ? `whatsapp://send?phone=${n}${t ? `&text=${t}` : ""}` : `https://wa.me/${n}${t ? `?text=${t}` : ""}`;
+}
+
+/** Link attributes: wa.me must leave the app (new tab) so iOS can hand it to WhatsApp. */
+export function waLinkProps(phone: string | undefined, text?: string): { href?: string; target?: string; rel?: string } {
+  const href = waHref(phone, text);
+  if (!href) return {};
+  return href.startsWith("https:") ? { href, target: "_blank", rel: "noopener noreferrer" } : { href };
 }
 
 export function openWhatsApp(phone: string | undefined, text?: string): boolean {
   const href = waHref(phone, text);
   if (!href) return false;
-  location.href = href;
+  if (href.startsWith("https:")) {
+    // (passing "noopener" makes window.open return null even on success, so
+    // detach the opener by hand and only fall back when it really was blocked)
+    const w = window.open(href, "_blank");
+    if (w) w.opener = null;
+    else location.href = href;
+  } else location.href = href;
   return true;
 }
