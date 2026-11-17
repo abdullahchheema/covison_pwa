@@ -130,7 +130,7 @@ export function OwedCard() {
 }
 
 // ---------------- money in / out ----------------
-function FlowSide({ label, f, tone }: { label: string; f: Flow; tone: "business" | "personal" }) {
+function FlowSide({ label, f, tone, balance, current }: { label: string; f: Flow; tone: "business" | "personal"; balance?: number; current: boolean }) {
   const inn = useCountUp(f.in, 1000);
   const out = useCountUp(f.out, 1000);
   return (
@@ -151,8 +151,13 @@ function FlowSide({ label, f, tone }: { label: string; f: Flow; tone: "business"
       </span>
       <span class={`flow-net num ${f.net >= 0 ? "c-success" : "c-danger"}`}>
         {f.net >= 0 ? "+" : "−"}
-        {money(Math.abs(f.net))} net
+        {money(Math.abs(f.net))} {current ? "this month" : "that month"}
       </span>
+      {balance !== undefined && (
+        <span class="flow-bal num">
+          Balance now <strong>{money(balance)}</strong>
+        </span>
+      )}
     </div>
   );
 }
@@ -162,6 +167,7 @@ export function FlowCard({ switcher, i = 2 }: { switcher?: boolean; i?: number }
   const now = new Date();
   const [ym, setYm] = useState<[number, number]>([now.getFullYear(), now.getMonth()]);
   const f = useLive(() => monthFlows(ym[0], ym[1]), [ym[0], ym[1]]);
+  const bal = useLive(balanceTotals, []);
   const hasAccounts = useLive(async () => (await db.accounts.count()) > 0, []);
   if (!f || hasAccounts === false) return null;
   const isCurrent = ym[0] === now.getFullYear() && ym[1] === now.getMonth();
@@ -194,8 +200,8 @@ export function FlowCard({ switcher, i = 2 }: { switcher?: boolean; i?: number }
         )}
       </div>
       <div class="flow-grid">
-        <FlowSide label="Business" f={f.business} tone="business" />
-        <FlowSide label="Personal" f={f.personal} tone="personal" />
+        <FlowSide label="Business" f={f.business} tone="business" balance={bal?.business} current={isCurrent} />
+        <FlowSide label="Personal" f={f.personal} tone="personal" balance={bal?.personal} current={isCurrent} />
       </div>
       <div class="flow-total row between">
         <span class="t-footnote c3">

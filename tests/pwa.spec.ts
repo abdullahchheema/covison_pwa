@@ -320,6 +320,10 @@ test("money: Home balances and owed split, WhatsApp, loan repayment into an acco
     await expect(per.locator(".flow-line.out")).toHaveText(/14,500/);
     // All accounts: the cross-side transfer cancels out
     await expect(page.locator(".flow-total")).toContainText(/in Rs\s?145,000 · out Rs\s?30,000/);
+    // The monthly figure is labelled as this month's, and each side shows its real balance
+    await expect(per.locator(".flow-net")).toContainText("this month");
+    await expect(per.locator(".flow-bal")).toContainText(/Balance now\s*Rs\s?62,500/);
+    await expect(biz.locator(".flow-bal")).toContainText(/Balance now\s*Rs\s?359,500/);
   }
 
   // Tapping Personal opens the detailed list
