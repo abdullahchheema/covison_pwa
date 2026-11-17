@@ -6,6 +6,7 @@ import "./styles/motion.css";
 import { App } from "./app";
 import { db } from "./db/schema";
 import { ensureSeeded } from "./db/seed";
+import { runMigrations } from "./db/migrations";
 import { registerServiceWorker, requestPersistence } from "./lib/pwa";
 import { syncThemeColor } from "./lib/theme";
 
@@ -42,7 +43,7 @@ async function boot() {
     // Open the database and seed the default pipeline before the first screen
     // renders, so every screen's first frame already has data (no blank flash).
     await Promise.race([
-      db.open().then(ensureSeeded),
+      db.open().then(ensureSeeded).then(runMigrations),
       new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8000)),
     ]);
   } catch (e) {

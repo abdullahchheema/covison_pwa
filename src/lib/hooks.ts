@@ -35,7 +35,9 @@ export function useCountUp(target: number, duration = 1100): number {
       const p = Math.min(1, (t - start) / duration);
       const e = p === 1 ? 1 : 1 - Math.pow(2, -10 * p);
       const cur = a + (target - a) * e;
-      setV(cur);
+      // Animate in whole rupees (or paisa for amounts that have them), so the
+      // number never flickers through random decimals; land exactly on target.
+      setV(p === 1 ? target : Number.isInteger(target) ? Math.round(cur) : Math.round(cur * 100) / 100);
       if (p < 1) raf = requestAnimationFrame(tick);
       else from.current = target;
     };

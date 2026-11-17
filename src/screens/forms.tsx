@@ -36,11 +36,12 @@ import {
   TASK_PRIORITIES,
 } from "../lib/options";
 import { MAX_LONG, cleanText, isEmail, optText } from "../lib/sanitize";
-import { fromDateTimeInput, toDateTimeInput } from "../lib/format";
+import { fromDateTimeInput, money, toDateTimeInput } from "../lib/format";
 import { Group, Row, Segmented, SelectField, SwitchField, TextArea, TextField } from "../ui/kit";
-import { actionSheet, confirmSheet, openSheet, toast } from "../ui/overlay";
-import { contactPickerSupported, parseVCards, phoneKey, pickPhoneContact, type PhoneContact } from "../lib/phoneContacts";
+import { confirmSheet, openSheet, toast } from "../ui/overlay";
+import { parseVCards, phoneKey } from "../lib/phoneContacts";
 import { pickFile } from "./CsvImport";
+import { linkLedgerPeople } from "../db/migrations";
 import { AccountSelect, useDefaultAccount } from "./moneyForms";
 import { rememberAccount } from "../db/accounts";
 import { Icon } from "../ui/icons";
@@ -190,12 +191,6 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
 
   return (
     <div class="form">
-      <PhoneContactButton
-        onPick={(p) => {
-          setF((prev) => ({ ...prev, name: p.name || prev.name, phone: p.phone ?? prev.phone, email: p.email ?? prev.email, jobTitle: p.title ?? prev.jobTitle, companyName: p.org ?? prev.companyName }));
-          if (p.org) setCompanyTouched(true);
-        }}
-      />
       <Group>
         <TextField label="Name" value={f.name} onInput={set("name")} placeholder="Required" autoFocus={!existing} />
         <TextField label="Email" value={f.email} onInput={set("email")} type="email" inputMode="email" />
@@ -750,97 +745,67 @@ export function openLeadForm(defaults: { stageId?: string; contactId?: string } 
 }
 
 function LeadForm({ bind, defaults }: { bind: Binding; defaults: { stageId?: string; contactId?: string } }) {
-  const [mode, setMode] = useState<"new" | "existing">(defaults.contactId ? "existing" : "new");
-  const [f, setF] = useState({
-    name: "",
-    phone: "",
-    company: "",
-    contactId: defaults.contactId ?? "",
-    dealName: "",
-    value: "",
-    stageId: defaults.stageId ?? "",
-    paymentTerms: "immediate",
-    note: "",
-  });
+  // Two shapes: a brand-new lead (just the essentials), or a new deal for an
+  // existing client (opened from "New deal with …").
+  const existingId = defaults.contactId;
+  const [f, setF] = useState({ name: "", phone: "", company: "", position: "", dealName: "" });
   const set = (k: keyof typeof f) => (v: string) => setF((p) => ({ ...p, [k]: v }));
   const stages = useLive(async () => {
     const pid = await defaultPipelineId();
     return pid ? db.stages.where("pipelineId").equals(pid).sortBy("position") : ([] as Stage[]);
   }, []);
-  const contacts = useLive(() => db.contacts.orderBy("name").toArray(), []);
-  const stageId = f.stageId || stages?.[0]?.id || "";
+  const client = useLive(async () => (existingId ? await db.contacts.get(existingId) : undefined), [existingId]);
+  const stageId = defaults.stageId || stages?.find((s) => !s.isWon && !s.isLost)?.id || stages?.[0]?.id || "";
 
   bind.current = async () => {
     if (!stageId) return fail("Add a pipeline stage first");
     const stage = stages!.find((s) => s.id === stageId)!;
-    let contactId = f.contactId;
-    let contactName = "";
-    let companyId: string | undefined;
-    if (mode === "new") {
+    let contactId = existingId;
+    let contactName = client?.name ?? "";
+    let companyId = client?.companyId;
+    if (!existingId) {
       const name = optText(f.name);
       if (!name) return fail("Name is required");
       companyId = await resolveCompany(f.company);
       contactId = await saveContact({
         name,
         phone: optText(f.phone),
+        jobTitle: optText(f.position),
         status: "new",
         companyId,
-        paymentTerms: f.paymentTerms as Contact["paymentTerms"],
         customFields: {},
       });
       contactName = name;
-    } else {
-      if (!contactId) return fail("Choose a contact");
-      const c = await db.contacts.get(contactId);
-      contactName = c?.name ?? "";
-      companyId = c?.companyId;
     }
-    const dealId = await saveDeal({
+    await saveDeal({
       pipelineId: stage.pipelineId,
       stageId,
       name: optText(f.dealName) ?? contactName,
-      value: numOrUndef(f.value) ?? 0,
+      value: 0,
       currency: DEFAULT_CURRENCY,
       contactId,
       companyId,
     });
-    const note = optText(f.note, MAX_LONG);
-    if (note) await addNote({ dealId }, note);
     toast(`Lead added to ${stage.name}`, { icon: "sparkles" });
   };
 
+  if (existingId)
+    return (
+      <div class="form">
+        <Group footer="The deal starts in the pipeline; set the money when it's won.">
+          <Row title={client?.name ?? "…"} sub="client" chevron={false} />
+          <TextField label="Deal name" value={f.dealName} onInput={set("dealName")} placeholder="e.g. Website v2" autoFocus />
+        </Group>
+      </div>
+    );
+
   return (
     <div class="form">
-      <Segmented
-        value={mode}
-        onChange={setMode}
-        options={[
-          { value: "new", label: "New person" },
-          { value: "existing", label: "Existing contact" },
-        ]}
-      />
-      {mode === "new" && (
-        <PhoneContactButton onPick={(p) => setF((prev) => ({ ...prev, name: p.name || prev.name, phone: p.phone ?? prev.phone, company: p.org ?? prev.company }))} />
-      )}
-      {mode === "new" ? (
-        <Group footer="Enter the number as you'd dial it (e.g. 0300 1234567). WhatsApp opens with it directly.">
-          <TextField label="Name" value={f.name} onInput={set("name")} placeholder="Required" autoFocus />
-          <TextField label="Phone" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" placeholder="0300 1234567" />
-          <CompanyField value={f.company} onInput={set("company")} />
-          <SelectField label="Pays" value={f.paymentTerms} placeholder={false} onChange={set("paymentTerms")} options={[{ value: "immediate", label: "Immediately" }, { value: "credit", label: "On credit" }]} />
-        </Group>
-      ) : (
-        <div class="group">
-          <SelectField label="Contact" value={f.contactId} onChange={set("contactId")} placeholder="Choose…" options={(contacts ?? []).map((x) => ({ value: x.id, label: x.name }))} />
-        </div>
-      )}
-      <Group label="Deal">
-        <SelectField label="Stage" value={stageId} placeholder={false} onChange={set("stageId")} options={(stages ?? []).map((s) => ({ value: s.id, label: s.name }))} />
-        <TextField label="Value (Rs)" value={f.value} onInput={set("value")} inputMode="numeric" placeholder="Optional, set when won" />
-        <TextField label="Deal name" value={f.dealName} onInput={set("dealName")} placeholder="Defaults to the name" />
-      </Group>
-      <Group>
-        <TextArea label="Note" value={f.note} onInput={set("note")} placeholder="What do they need?" />
+      <Group footer="A new company is added to Companies automatically. Money is asked for when the lead is won.">
+        <TextField label="Name" value={f.name} onInput={set("name")} placeholder="Required" autoFocus />
+        <TextField label="Mobile" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" placeholder="0300 1234567" />
+        <CompanyField value={f.company} onInput={set("company")} />
+        <TextField label="Position" value={f.position} onInput={set("position")} placeholder="e.g. Owner, Manager" />
       </Group>
     </div>
   );
@@ -896,6 +861,11 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
       settledAt: existing?.settledAt,
     });
     if (f.kind === "loan") rememberAccount(accountId);
+    // Everyone you lend to / borrow from becomes a contact (tagged Personal for loans).
+    if (!f.contactId) {
+      const made = await linkLedgerPeople();
+      if (made) toast(`${personName} added to Contacts`, { icon: "user" });
+    }
     toast(existing ? "Entry updated" : f.direction === "in" ? "Added to money owed to you" : "Added to money you owe", { icon: "wallet" });
   };
 
@@ -917,7 +887,7 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
           { value: "credit", label: "Credit (business)" },
         ]}
       />
-      <Group label="Who" footer="Pick a contact, or just type a name for people who aren't in your CRM.">
+      <Group label="Who" footer="Pick a contact, or type a new name and number; they're added to Contacts automatically.">
         <SelectField label="Contact" value={f.contactId} onChange={set("contactId")} placeholder="Not a contact" options={(contacts ?? []).map((x) => ({ value: x.id, label: x.name }))} />
         {!f.contactId && <TextField label="Name" value={f.personName} onInput={set("personName")} placeholder="Required" />}
         {!f.contactId && <TextField label="Phone" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" placeholder="For WhatsApp reminders" />}
@@ -948,14 +918,14 @@ function PaymentForm({ bind, entry, remaining }: { bind: Binding; entry: LedgerE
   bind.current = async () => {
     const a = numOrUndef(amount);
     if (!a || a <= 0) return fail("Enter an amount");
-    if (a > remaining + 0.001) return fail(`That's more than the Rs ${remaining.toLocaleString()} left`);
+    if (a > remaining + 0.001) return fail(`That's more than the ${money(remaining)} left`);
     rememberAccount(accountId);
     await addPayment(entry.id, a, date || todayYmd(), optText(note, 500), undefined, accountId || undefined);
     toast(a >= remaining ? "Fully settled 🎉" : "Payment recorded", { icon: "checkCircle" });
   };
   return (
     <div class="form">
-      <Group footer={`Remaining: Rs ${remaining.toLocaleString()}. Partial payments are fine.`}>
+      <Group footer={`Remaining: ${money(remaining)}. Partial payments are fine.`}>
         <TextField label="Amount (Rs)" value={amount} onInput={setAmount} inputMode="decimal" autoFocus />
         <TextField label="Date" value={date} onInput={setDate} type="date" />
         <AccountSelect value={accountId} onChange={setAccountId} label={entry.direction === "in" ? "Into account" : "From account"} optional />
@@ -966,110 +936,6 @@ function PaymentForm({ bind, entry, remaining }: { bind: Binding; entry: LedgerE
 }
 
 // =================== From iPhone contacts ===================
-export interface ChosenPerson {
-  name: string;
-  phone?: string;
-  email?: string;
-  org?: string;
-  title?: string;
-}
-
-function chooseOne<T>(items: T[], label: (t: T) => string, title: string): Promise<T | null> {
-  if (items.length <= 1) return Promise.resolve(items[0] ?? null);
-  return new Promise((resolve) => {
-    actionSheet(
-      items.slice(0, 40).map((it) => ({ label: label(it), run: () => resolve(it) })),
-      title,
-      () => resolve(null),
-    );
-  });
-}
-
-async function finishChoice(c: PhoneContact): Promise<ChosenPerson | null> {
-  const phone = await chooseOne(c.phones, (p) => p, `Which number for ${c.name}?`);
-  if (c.phones.length > 1 && !phone) return null;
-  return { name: c.name, phone: phone ?? undefined, email: c.emails[0], org: c.org, title: c.title };
-}
-
-async function fromVcfFile(): Promise<ChosenPerson | null> {
-  const [file] = await pickFile(".vcf,text/vcard,text/x-vcard");
-  if (!file) return null;
-  const people = parseVCards(await file.text());
-  if (!people.length) {
-    toast("No contacts found in that file", { error: true });
-    return null;
-  }
-  const c = await chooseOne(people, (p) => (p.phones[0] ? `${p.name} · ${p.phones[0]}` : p.name), "Choose a person");
-  return c ? finishChoice(c) : null;
-}
-
-/** Pick one person from the iPhone's Contacts (native picker, or a shared .vcf file). */
-export async function choosePhoneContact(): Promise<ChosenPerson | null> {
-  if (contactPickerSupported()) {
-    try {
-      const c = await pickPhoneContact();
-      return c ? finishChoice(c) : null;
-    } catch {
-      /* fall through to the file option */
-    }
-  }
-  return new Promise((resolve) => {
-    let settled = false;
-    let pickingFile = false; // closing the sheet to open the file picker is not a cancel
-    const settle = (v: ChosenPerson | null) => {
-      if (settled) return;
-      settled = true;
-      resolve(v);
-    };
-    openSheet(
-      (close) => (
-        <div class="form">
-          <div class="banner brand">
-            <Icon name="users" size={22} class="b-ico" />
-            <span>Your iPhone hasn't enabled direct contact picking for web apps yet. Choose either option below.</span>
-          </div>
-          <Group label="Quickest: share the contact as a file">
-            <Row title={<span class="t-subhead">1. Open the Contacts app and tap the person</span>} chevron={false} />
-            <Row title={<span class="t-subhead">2. Tap Share Contact → Save to Files</span>} chevron={false} />
-            <Row title={<span class="t-subhead">3. Come back and tap the button below</span>} chevron={false} />
-          </Group>
-          <button
-            class="btn primary block press"
-            onClick={async () => {
-              pickingFile = true;
-              close();
-              settle(await fromVcfFile());
-            }}
-          >
-            <Icon name="file" size={20} /> Choose contact file (.vcf)
-          </button>
-          <Group label="Or turn on the native picker (one-time)" footer="After this, a “From iPhone contacts” tap opens your Contacts list directly. Only the person you pick is shared with the app.">
-            <Row title={<span class="t-subhead">Settings → Apps → Safari → Advanced → Feature Flags → turn on “Contact Picker API”, then reopen Covison</span>} chevron={false} />
-          </Group>
-        </div>
-      ),
-      { title: "From iPhone contacts", onClose: () => !pickingFile && settle(null) },
-    );
-  });
-}
-
-function PhoneContactButton({ onPick }: { onPick: (p: ChosenPerson) => void }) {
-  return (
-    <button
-      class="btn tinted block press"
-      onClick={async () => {
-        const p = await choosePhoneContact();
-        if (p) {
-          onPick(p);
-          toast(`Filled in from ${p.name}`, { icon: "user" });
-        }
-      }}
-    >
-      <Icon name="users" size={20} /> From iPhone contacts
-    </button>
-  );
-}
-
 /** Bulk import of a multi-contact .vcf (Settings / Contacts menu). De-duplicates by phone, then email. */
 export async function importVcfContacts() {
   const [file] = await pickFile(".vcf,text/vcard,text/x-vcard");
@@ -1147,6 +1013,7 @@ function TransactionForm({ bind, existing, defaults }: { bind: Binding; existing
       note: optText(note, 2000),
       contactId: contactId || undefined,
       dealId: t.dealId,
+      projectId: t.projectId,
       ledgerPaymentId: t.ledgerPaymentId,
     });
     toast(existing ? "Updated" : type === "income" ? "Income added" : "Expense added", { icon: "wallet" });

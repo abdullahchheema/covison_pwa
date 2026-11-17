@@ -13,6 +13,8 @@ import { BarList, Sparkline } from "../ui/charts";
 import { TaskRow } from "./shared";
 import { BackupReminder } from "./Settings";
 import { BalanceCard, FlowCard, OwedCard } from "./Accounts";
+import { ProjectRowItem } from "./Projects";
+import { loadProjects } from "../db/projects";
 
 async function loadDashboard() {
   const pipelineId = await defaultPipelineId();
@@ -131,6 +133,7 @@ export function Dashboard() {
             <BalanceCard />
             <OwedCard />
             <FlowCard />
+            <OngoingProjects />
 
             <button class="hero press-soft rise mt12" style={{ "--i": 3, width: "100%", textAlign: "left", display: "block" } as never} onClick={() => switchTab("/pipeline")}>
               <div class="row between">
@@ -145,7 +148,7 @@ export function Dashboard() {
             </button>
 
             <div class="metrics mt12">
-              <Metric i={0} icon="users" grad="linear-gradient(135deg,#6d4aff,#a78bfa)" value={d.contactsCount} label="Contacts" onClick={() => switchTab("/contacts")} />
+              <Metric i={0} icon="users" grad="linear-gradient(135deg,#6d4aff,#a78bfa)" value={d.contactsCount} label="Contacts" onClick={() => navigate("/contacts")} />
               <Metric i={1} icon="building" grad="linear-gradient(135deg,#2878d9,#69a8ff)" value={d.companiesCount} label="Companies" onClick={() => navigate("/companies")} />
               <Metric
                 i={2}
@@ -252,5 +255,27 @@ export function Dashboard() {
         )}
       </div>
     </Screen>
+  );
+}
+
+function OngoingProjects() {
+  const rows = useLive(async () => (await loadProjects()).filter((r) => r.status !== "completed"), []);
+  if (!rows || rows.length === 0) return null;
+  const order = { in_progress: 0, not_started: 1, completed: 2 } as const;
+  const list = [...rows].sort((a, b) => order[a.status] - order[b.status]).slice(0, 5);
+  return (
+    <section class="section">
+      <div class="section-head">
+        <h2>Ongoing projects</h2>
+        <button class="link" onClick={() => switchTab("/projects")}>
+          All {rows.length > 5 ? `(${rows.length})` : ""}
+        </button>
+      </div>
+      <div class="group">
+        {list.map((r, i) => (
+          <ProjectRowItem key={r.project.id} r={r} i={i + 3} />
+        ))}
+      </div>
+    </section>
   );
 }

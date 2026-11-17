@@ -325,3 +325,42 @@ These features are new in the PWA. They didn't exist in the web CRM.
 - **A business → personal transfer** counts as out of business and into personal. In the "All accounts" line it cancels out.
 - Home shows the current month. Money → Accounts has a month switcher. Each account's page shows that account's in and out for the current month.
 - Entries with no account (recorded before accounts existed) are not part of these totals. They still show in Money → Cash flow.
+
+### Pipeline: Lead → Negotiation → Won
+- New installs get only these three stages.
+- Existing installs are migrated once at start-up, with every deal kept:
+  - Qualified → Lead
+  - Proposal → Negotiation
+  - Lost is removed only if it's empty
+- Custom stages are left alone.
+
+### New lead form
+- Asks only for **Name, Mobile, Company, Position**.
+- The company is created automatically if it's new, and a company can have many contacts.
+- Money is asked for when the lead is won.
+- "New deal with {client}" asks only for a deal name.
+
+### Projects tab (replaces Contacts in the tab bar; Contacts is now under More)
+- Projects carry a `status`: Not started / In progress / Completed (Dexie version 5). Existing projects start as In progress, and new ones from a won deal as Not started.
+- The list shows rows grouped by stage, with received, spent and due figures. Swipe a row left to start or complete it.
+- The project page has:
+  - a stage switch
+  - Agreed / Received / Spent / Still due (or Profit), with a progress bar
+  - **Money received** and **Expense** buttons
+  - a list of the project's money in and out, then the to-do board and notes
+- **Where project money is stored:**
+  - Expenses are business expense entries with `transaction.projectId`.
+  - A project from a deal uses the deal's agreed total and payments.
+  - A project you create directly keeps its own `agreed` total and income entries.
+- Deleting a project keeps its money in your accounts and only removes the link.
+- Home shows **Ongoing projects**.
+
+### Loans and contacts
+- Anyone you lend to, borrow from or sell to on credit becomes a contact. A typed name with a phone number is matched to an existing contact by phone, then by name, or created new. New contacts from personal loans are tagged **Personal**.
+- Existing loan entries are linked the same way at start-up.
+
+### Other changes
+- **Removed:** the single "From iPhone contacts" picker button. Bulk `.vcf` import stays in Contacts ⋯ and Settings.
+- **Sheets:** close with a downward swipe from anywhere on the sheet (when its content is scrolled to the top), not just the small grab bar.
+- **Money:** amounts keep and show their decimals (e.g. Rs 1,250.50). Totals and dues are rounded to paisa, and animated numbers count up without decimal flicker.
+- **Restoring a backup:** the one-time fixes run only for backups from an older app version. A current backup is restored exactly.

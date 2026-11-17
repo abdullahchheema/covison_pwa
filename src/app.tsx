@@ -100,8 +100,8 @@ function ScreenStack() {
 
 const TABS: { path: string; label: string; icon: IconName }[] = [
   { path: "/", label: "Home", icon: "home" },
-  { path: "/contacts", label: "Contacts", icon: "users" },
   { path: "/pipeline", label: "Pipeline", icon: "pipeline" },
+  { path: "/projects", label: "Projects", icon: "folder" },
   { path: "/money", label: "Money", icon: "wallet" },
   { path: "/more", label: "More", icon: "grid" },
 ];
@@ -130,7 +130,7 @@ function TabBar() {
 
 function Fab() {
   const route = useRoute();
-  const show = ["/", "/contacts", "/pipeline", "/money", "/tasks"].includes(route.path);
+  const show = ["/", "/contacts", "/pipeline", "/projects", "/money", "/tasks"].includes(route.path);
   const open = () =>
     actionSheet(
       [

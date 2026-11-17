@@ -1632,3 +1632,37 @@
   width: 26px;
   flex-shrink: 0;
 }
+
+/* ============ Projects ============ */
+.pm-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.pm-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.pm-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  text-align: left;
+  min-width: 0;
+}
+.tile.pstage.not_started {
+  background: linear-gradient(135deg, #68636f, #9a94a3);
+}
+.tile.pstage.in_progress {
+  background: linear-gradient(135deg, #4f46e5, #8b72ff);
+}
+.tile.pstage.completed {
+  background: linear-gradient(135deg, #149a68, #42d39a);
+}

@@ -96,6 +96,8 @@ export function ContactsList() {
     <Screen
       title="Contacts"
       subtitle={data ? `${data.contacts.length} people` : " "}
+      backLabel="More"
+      backTo="/more"
       right={
         <>
           <button class="nav-btn" aria-label="Filters" onClick={openFilters}>

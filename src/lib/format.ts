@@ -4,11 +4,12 @@ const moneyCache = new Map<string, Intl.NumberFormat>();
 
 /**
  * Currency formatting. Default is Pakistani rupees, shown the local way
- * ("Rs 83,100"). Whole rupees only; other currencies keep up to 2 decimals.
+ * ("Rs 83,100"). Amounts with paisa keep their decimals ("Rs 1,250.50").
  */
 export function money(value: number | undefined, currency = "PKR", compact = false): string {
-  const v = value ?? 0;
-  const whole = currency === "PKR" || v % 1 === 0;
+  // Round to paisa first so floating-point noise (0.1 + 0.2) never shows.
+  const v = Math.round((value ?? 0) * 100) / 100;
+  const whole = Number.isInteger(v);
   const key = `${currency}|${compact}|${whole}`;
   let fmt = moneyCache.get(key);
   if (!fmt) {
@@ -18,6 +19,7 @@ export function money(value: number | undefined, currency = "PKR", compact = fal
         currency,
         currencyDisplay: currency === "PKR" ? "narrowSymbol" : "symbol",
         notation: compact ? "compact" : "standard",
+        minimumFractionDigits: compact || whole ? 0 : 2,
         maximumFractionDigits: compact ? 1 : whole ? 0 : 2,
       });
     } catch {

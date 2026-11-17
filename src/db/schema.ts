@@ -7,6 +7,7 @@ export type ActivityType = "note" | "call" | "meeting" | "field_change";
 export type TagColor = "neutral" | "brand" | "success" | "warning" | "danger" | "info";
 export type LeadFieldType = "text" | "number" | "date" | "select" | "checkbox";
 export type PaymentTerms = "immediate" | "credit";
+export type ProjectStatus = "not_started" | "in_progress" | "completed";
 
 export interface Contact {
   /** How this client pays: up front, or on credit (creates a receivable when a deal is won). */
@@ -149,6 +150,10 @@ export interface Project {
   dealId?: string;
   contactId?: string;
   description?: string;
+  /** Where the work stands. */
+  status?: ProjectStatus;
+  /** Agreed total for projects not created from a deal (deal projects use deal.value). */
+  agreed?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -235,6 +240,8 @@ export interface Transaction {
   ledgerPaymentId?: string;
   /** Which account the money went into / came out of. */
   accountId?: string;
+  /** Money received for, or spent on, a project. */
+  projectId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -327,6 +334,18 @@ export class CovisonDB extends Dexie {
       accounts: "id, position, scope",
       transfers: "id, date, fromAccountId, toAccountId",
     });
+    // v5: project status + project money (income/expense linked to a project).
+    this.version(5)
+      .stores({
+        transactions: "id, date, type, scope, category, dealId, contactId, ledgerPaymentId, accountId, projectId",
+        projects: "id, updatedAt, dealId, contactId, status",
+      })
+      .upgrade(async (tx) => {
+        // Projects that already exist are most likely being worked on.
+        await tx.table("projects").toCollection().modify((p: { status?: string }) => {
+          if (!p.status) p.status = "in_progress";
+        });
+      });
   }
 }
 
@@ -355,6 +374,6 @@ export const DATA_TABLES = [
 ] as const;
 export type DataTableName = (typeof DATA_TABLES)[number];
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const DEFAULT_CURRENCY = "PKR";

@@ -17,12 +17,9 @@ export async function ensureSeeded(): Promise<void> {
     const pipelineId = uid();
     await db.pipelines.add({ id: pipelineId, name: "Sales Pipeline", isDefault: 1, createdAt: t, updatedAt: t });
     const names: [string, number, boolean, boolean][] = [
-      ["Lead", 10, false, false],
-      ["Qualified", 25, false, false],
-      ["Proposal", 50, false, false],
-      ["Negotiation", 75, false, false],
+      ["Lead", 20, false, false],
+      ["Negotiation", 60, false, false],
       ["Won", 100, true, false],
-      ["Lost", 0, false, true],
     ];
     const stages: Stage[] = names.map(([name, probability, isWon, isLost], position) => ({
       id: uid(),
@@ -42,6 +39,12 @@ export async function ensureSeeded(): Promise<void> {
 
 /** Demo data so the app can be explored before importing real data. */
 export async function loadSampleData(): Promise<void> {
+  await loadSampleDataInner();
+  const { linkLedgerPeople } = await import("./migrations");
+  await linkLedgerPeople();
+}
+
+async function loadSampleDataInner(): Promise<void> {
   await ensureSeeded();
   const stages = await db.stages.orderBy("position").toArray();
   const pipelineId = stages[0]?.pipelineId;
@@ -106,13 +109,13 @@ export async function loadSampleData(): Promise<void> {
   ]);
 
   const dealDefs: [string, number, number, number, number][] = [
-    ["Northwind annual licence", 650000, 2, 0, -12],
-    ["Bluepeak rebrand", 240000, 1, 2, -9],
-    ["Atlas fleet tracking", 1150000, 3, 3, -7],
-    ["Lumen pilot", 320000, 4, 4, -20],
+    ["Northwind annual licence", 650000, 1, 0, -12],
+    ["Bluepeak rebrand", 240000, 0, 2, -9],
+    ["Atlas fleet tracking", 1150000, 1, 3, -7],
+    ["Lumen pilot", 320000, 2, 4, -20],
     ["Cedar POS rollout", 180000, 0, 5, -3],
     ["Northwind add-on seats", 90000, 1, 1, -1],
-    ["Bluepeak retainer", 135000, 5, 6, -25],
+    ["Bluepeak retainer", 135000, 0, 6, -25],
   ];
   await db.deals.bulkAdd(
     dealDefs.map(([name, value, si, ci, created]) => ({
@@ -166,7 +169,7 @@ export async function loadSampleData(): Promise<void> {
 
   const t = now();
   const projectId = uid();
-  await db.projects.add({ id: projectId, name: "Q3 launch", createdAt: t, updatedAt: t });
+  await db.projects.add({ id: projectId, name: "Q3 launch", status: "in_progress", agreed: 0, createdAt: t, updatedAt: t });
   const colIds = [uid(), uid(), uid()];
   await db.projectColumns.bulkAdd(
     ["To do", "In progress", "Done"].map((name, position) => ({

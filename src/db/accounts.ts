@@ -12,6 +12,7 @@
 // account was added are treated as already included in the opening balance.
 import { db, type Account, type Deal, type LedgerEntry, type Transfer } from "./schema";
 import { now, todayYmd, uid, withBalance, type Snapshot } from "./repo";
+import { money } from "../lib/format";
 
 export interface Movement {
   id: string;
@@ -272,7 +273,7 @@ export async function wonDealMoney(): Promise<DealMoney[]> {
     .filter((d) => won.has(d.stageId) && !withLedger.has(d.id))
     .map((deal) => {
       const r = received.get(deal.id) ?? 0;
-      return { deal, agreed: deal.value || 0, received: r, due: Math.max(0, (deal.value || 0) - r) };
+      return { deal, agreed: deal.value || 0, received: r, due: Math.max(0, Math.round(((deal.value || 0) - r) * 100) / 100) };
     });
 }
 
@@ -308,12 +309,26 @@ export async function owedSummary() {
     else if (e.kind === "loan") personal.push(line);
     else business.push(line);
   }
+  // Projects created directly (not from a deal) with an agreed total still to collect.
+  const [manual, allTx] = await Promise.all([db.projects.filter((p) => !p.dealId && (p.agreed ?? 0) > 0).toArray(), db.transactions.toArray()]);
+  for (const mp of manual) {
+    const got = allTx.filter((t) => t.projectId === mp.id && t.type === "income").reduce((s, t) => s + t.amount, 0);
+    const due = Math.round(((mp.agreed ?? 0) - got) * 100) / 100;
+    if (due <= 0) continue;
+    business.push({
+      id: mp.id,
+      title: mp.contactId ? name.get(mp.contactId) ?? mp.name : mp.name,
+      sub: `Project “${mp.name}” · received ${money(got)} of ${money(mp.agreed ?? 0)}`,
+      amount: due,
+      link: `/projects/${mp.id}`,
+    });
+  }
   for (const p of projects) {
     if (p.due <= 0) continue;
     business.push({
       id: p.deal.id,
       title: p.deal.contactId ? name.get(p.deal.contactId) ?? p.deal.name : p.deal.name,
-      sub: `Project “${p.deal.name}” · received ${p.received.toLocaleString()} of ${p.agreed.toLocaleString()}`,
+      sub: `Project “${p.deal.name}” · received ${money(p.received)} of ${money(p.agreed)}`,
       amount: p.due,
       link: `/deals/${p.deal.id}`,
     });

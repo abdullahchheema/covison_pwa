@@ -10,7 +10,7 @@ export interface RouteState {
   key: number;
 }
 
-export const TAB_ROOTS = ["/", "/contacts", "/pipeline", "/money", "/more"];
+export const TAB_ROOTS = ["/", "/pipeline", "/projects", "/money", "/more"];
 
 const stack: string[] = [];
 let state: RouteState = { path: currentPath(), dir: "none", key: 0 };

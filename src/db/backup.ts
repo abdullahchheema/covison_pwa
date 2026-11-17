@@ -1,6 +1,7 @@
 // Full backup / restore as one JSON file.
 import { DATA_TABLES, SCHEMA_VERSION, db, type DataTableName } from "./schema";
 import { now, setMeta } from "./repo";
+import { resetMigrationFlags, runMigrations } from "./migrations";
 
 export const BACKUP_APP_ID = "covison-pocket";
 
@@ -209,6 +210,7 @@ export function validateBackup(raw: unknown): ValidationResult {
     ref("transactions", "contactId", "contacts", false);
     ref("transactions", "ledgerPaymentId", "payments", false);
     ref("transactions", "accountId", "accounts", false);
+    ref("transactions", "projectId", "projects", false);
     ref("ledger", "accountId", "accounts", false);
     ref("payments", "accountId", "accounts", false);
     ref("transfers", "fromAccountId", "accounts", true);
@@ -243,4 +245,12 @@ export async function restoreBackup(backup: BackupFile): Promise<void> {
     }
   });
   await setMeta("seeded", true);
+  // A backup from an older app version may need the same one-time fixes as an
+  // older install. A current backup is restored exactly as it was saved.
+  if (backup.schemaVersion < SCHEMA_VERSION) {
+    await resetMigrationFlags();
+    await runMigrations();
+  } else {
+    await setMeta("migr.pipeline3", true);
+  }
 }

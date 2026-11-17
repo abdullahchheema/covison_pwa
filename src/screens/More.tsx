@@ -5,10 +5,10 @@ import { Icon, type IconName } from "../ui/icons";
 import { Group, Row, Screen } from "../ui/kit";
 import { BackupReminder } from "./Settings";
 
-const ITEMS: { to: string; label: string; icon: IconName; tile: string; count?: "companies" | "projects" | "tags" | "leadTypes" | "tasks" }[] = [
+const ITEMS: { to: string; label: string; icon: IconName; tile: string; count?: "companies" | "projects" | "tags" | "leadTypes" | "tasks" | "contacts" }[] = [
+  { to: "/contacts", label: "Contacts", icon: "users", tile: "violet", count: "contacts" },
   { to: "/tasks", label: "Tasks", icon: "tasks", tile: "green", count: "tasks" },
   { to: "/companies", label: "Companies", icon: "building", tile: "blue", count: "companies" },
-  { to: "/projects", label: "Projects", icon: "folder", tile: "orange", count: "projects" },
   { to: "/reports", label: "Reports", icon: "chart", tile: "violet" },
   { to: "/search", label: "Search", icon: "search", tile: "gray" },
 ];
@@ -21,6 +21,7 @@ const ORGANISE: typeof ITEMS = [
 export function More() {
   const counts = useLive(async () => ({
     tasks: await db.tasks.where("status").equals("open").count(),
+    contacts: await db.contacts.count(),
     companies: await db.companies.count(),
     projects: await db.projects.count(),
     tags: await db.tags.count(),

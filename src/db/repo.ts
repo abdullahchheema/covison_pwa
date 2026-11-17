@@ -349,8 +349,11 @@ export async function saveProject(input: Input<Project>): Promise<string> {
 export async function deleteProject(id: string): Promise<Snapshot> {
   return db.transaction(
     "rw",
-    [db.projects, db.projectColumns, db.projectTodos, db.tasks, db.activities],
+    [db.projects, db.projectColumns, db.projectTodos, db.tasks, db.activities, db.transactions],
     async () => {
+      const transactions = await db.transactions.where("projectId").equals(id).toArray();
+      // Money received / spent stays in your accounts; only the link to the project goes.
+      await db.transactions.where("projectId").equals(id).modify((t) => void delete t.projectId);
       const project = await db.projects.get(id);
       const projectColumns = await db.projectColumns.where("projectId").equals(id).toArray();
       const projectTodos = await db.projectTodos.where("projectId").equals(id).toArray();
@@ -361,7 +364,7 @@ export async function deleteProject(id: string): Promise<Snapshot> {
       await db.tasks.where("projectId").equals(id).delete();
       await db.activities.where("projectId").equals(id).delete();
       await db.projects.delete(id);
-      return { projects: project ? [project] : [], projectColumns, projectTodos, tasks, activities };
+      return { projects: project ? [project] : [], projectColumns, projectTodos, tasks, activities, transactions };
     },
   );
 }
@@ -566,7 +569,7 @@ export const PAYMENT_METHODS = ["Cash", "Bank transfer", "JazzCash", "Easypaisa"
 export const CATEGORIES: Record<"business" | "personal", Record<"income" | "expense", string[]>> = {
   business: {
     income: ["Client payment", "Sales", "Services", "Commission", "Other income"],
-    expense: ["Supplies", "Salaries", "Rent", "Utilities", "Transport", "Marketing", "Software", "Equipment", "Food", "Taxes & fees", "Other"],
+    expense: ["Project costs", "Supplies", "Salaries", "Rent", "Utilities", "Transport", "Marketing", "Software", "Equipment", "Food", "Taxes & fees", "Other"],
   },
   personal: {
     income: ["Salary", "Profit", "Gift", "Refund", "Other income"],

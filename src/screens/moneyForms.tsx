@@ -1,6 +1,7 @@
 // Forms for accounts, transfers, and the "deal won" flow.
 import { useState } from "preact/hooks";
-import { db, type Account, type Deal } from "../db/schema";
+import { db, type Account, type Deal, type Project, type ProjectStatus } from "../db/schema";
+import { recordProjectIncome, setProjectAgreed } from "../db/projects";
 import { lastAccountId, listAccounts, rememberAccount, saveAccount, saveTransfer } from "../db/accounts";
 import { logActivity, recordDealPayment, saveContact, saveProject, setDealAgreed, todayYmd } from "../db/repo";
 import { useLive } from "../lib/hooks";
@@ -248,10 +249,11 @@ function WonForm({ bind, deal }: { bind: Binding; deal: Deal }) {
     const total = num(agreed) ?? 0;
     if (a > 0 && !accountId) return fail("Which account did the advance go into?");
     await db.deals.update(deal.id, { name: projectName, description: optText(desc, MAX_LONG), updatedAt: new Date().toISOString() });
+    // (the project below starts as "Not started"; change it on the Projects tab)
     if (total !== (deal.value || 0)) await setDealAgreed(deal.id, total);
     const existing = await db.projects.where("dealId").equals(deal.id).first();
     if (!existing) {
-      await saveProject({ name: projectName, dealId: deal.id, contactId: deal.contactId, description: optText(desc, MAX_LONG) });
+      await saveProject({ name: projectName, dealId: deal.id, contactId: deal.contactId, description: optText(desc, MAX_LONG), status: "not_started" });
     } else {
       await db.projects.update(existing.id, { name: projectName, description: optText(desc, MAX_LONG), updatedAt: new Date().toISOString() });
     }
@@ -279,6 +281,114 @@ function WonForm({ bind, deal }: { bind: Binding; deal: Deal }) {
         <TextField label="Total agreed (Rs)" value={agreed} onInput={setAgreed} inputMode="decimal" placeholder="Not agreed yet" />
         <TextField label="Advance received" value={advance} onInput={setAdvance} inputMode="decimal" placeholder="0 (none)" />
         {(num(advance) ?? 0) > 0 && <AccountSelect value={accountId} onChange={setAccountId} label="Into account" />}
+      </Group>
+    </div>
+  );
+}
+
+// ---------------- projects ----------------
+/** New project (or edit one): name, client, description, agreed total, stage. */
+export function openProjectEditForm(existing?: Project, onCreated?: (id: string) => void) {
+  openForm(existing ? "Edit project" : "New project", (bind) => <ProjectEditForm bind={bind} existing={existing} onCreated={onCreated} />);
+}
+
+function ProjectEditForm({ bind, existing, onCreated }: { bind: Binding; existing?: Project; onCreated?: (id: string) => void }) {
+  const contacts = useLive(() => db.contacts.orderBy("name").toArray(), []);
+  const deal = useLive(async () => (existing?.dealId ? await db.deals.get(existing.dealId) : undefined), [existing?.dealId]);
+  const [name, setName] = useState(existing?.name ?? "");
+  const [contactId, setContactId] = useState(existing?.contactId ?? "");
+  const [desc, setDesc] = useState(existing?.description ?? "");
+  const [agreedTouched, setAgreedTouched] = useState(false);
+  const [agreedText, setAgreed] = useState("");
+  const [status, setStatus] = useState<ProjectStatus>(existing?.status ?? "not_started");
+  const currentAgreed = (existing?.dealId ? deal?.value : existing?.agreed) || 0;
+  const agreed = agreedTouched ? agreedText : currentAgreed ? String(currentAgreed) : "";
+  bind.current = async () => {
+    const n = optText(name, 120);
+    if (!n) return fail("Give the project a name");
+    const total = num(agreed) ?? 0;
+    if (existing) {
+      await db.projects.update(existing.id, { name: n, contactId: contactId || undefined, description: optText(desc, MAX_LONG), status, updatedAt: new Date().toISOString() });
+      if (existing.dealId) await db.deals.update(existing.dealId, { name: n, updatedAt: new Date().toISOString() });
+      if (total !== currentAgreed) await setProjectAgreed({ ...existing }, total);
+      toast("Project updated");
+    } else {
+      const id = await saveProject({ name: n, contactId: contactId || undefined, description: optText(desc, MAX_LONG), status, agreed: total });
+      toast("Project created", { icon: "folder" });
+      onCreated?.(id);
+    }
+  };
+  return (
+    <div class="form">
+      <Group>
+        <TextField label="Name" value={name} onInput={setName} placeholder="Required" autoFocus={!existing} />
+        <SelectField label="Client" value={contactId} onChange={setContactId} placeholder="None / personal" options={(contacts ?? []).map((c) => ({ value: c.id, label: c.name }))} />
+        <TextField label="Total agreed (Rs)" value={agreed} onInput={(v) => { setAgreedTouched(true); setAgreed(v); }} inputMode="decimal" placeholder="Not agreed yet" />
+      </Group>
+      <div>
+        <div class="group-label">Stage</div>
+        <Segmented<ProjectStatus>
+          value={status}
+          onChange={setStatus}
+          options={[
+            { value: "not_started", label: "Not started" },
+            { value: "in_progress", label: "In progress" },
+            { value: "completed", label: "Completed" },
+          ]}
+        />
+      </div>
+      <Group>
+        <TextArea label="Description" value={desc} onInput={setDesc} placeholder="What will you deliver?" />
+      </Group>
+    </div>
+  );
+}
+
+/** Money received for a project, at any stage; also lets you set/change the agreed total. */
+export async function openProjectMoneyForm(project: Project, received: number) {
+  if (project.dealId) {
+    const deal = await db.deals.get(project.dealId);
+    if (deal) return openDealPaymentForm(deal, received);
+  }
+  openForm("Money received", (bind) => <ProjectMoneyForm bind={bind} project={project} received={received} />);
+}
+
+function ProjectMoneyForm({ bind, project, received }: { bind: Binding; project: Project; received: number }) {
+  const [agreed, setAgreed] = useState(project.agreed ? String(project.agreed) : "");
+  const left = Math.max(0, (num(agreed) ?? 0) - received);
+  const [amount, setAmount] = useState(left ? String(left) : "");
+  const [label, setLabel] = useState(received === 0 ? "Advance" : "Payment");
+  const [date, setDate] = useState(todayYmd());
+  const [accountId, setAccountId] = useDefaultAccount();
+  bind.current = async () => {
+    const a = num(amount) ?? 0;
+    const total = num(agreed) ?? 0;
+    if (a <= 0 && total === (project.agreed ?? 0)) return fail("Enter the money received, or change the agreed total");
+    if (a > 0 && !accountId) return fail("Which account did the money go into?");
+    if (total !== (project.agreed ?? 0)) await setProjectAgreed(project, total);
+    if (a > 0) {
+      rememberAccount(accountId);
+      await recordProjectIncome(project, a, date || todayYmd(), optText(label, 80) ?? "Payment", accountId);
+    }
+    toast(a > 0 ? `Received ${money(received + a)}${total ? ` of ${money(total)}` : ""}` : "Agreed total updated", { icon: "wallet" });
+  };
+  return (
+    <div class="form">
+      <div class="row wrap gap8" style="padding:0 4px">
+        {PAYMENT_LABELS.map((l) => (
+          <button key={l} class="chip press" aria-pressed={label === l} onClick={() => setLabel(l)}>
+            {l}
+          </button>
+        ))}
+      </div>
+      <Group label="Money received">
+        <TextField label="Amount (Rs)" value={amount} onInput={setAmount} inputMode="decimal" placeholder="0" autoFocus />
+        <AccountSelect value={accountId} onChange={setAccountId} label="Into account" />
+        <TextField label="For" value={label} onInput={setLabel} />
+        <TextField label="Date" value={date} onInput={setDate} type="date" />
+      </Group>
+      <Group label="Total agreed" footer={`Received so far: ${money(received)}.`}>
+        <TextField label="Agreed (Rs)" value={agreed} onInput={setAgreed} inputMode="decimal" placeholder="Not agreed yet" />
       </Group>
     </div>
   );

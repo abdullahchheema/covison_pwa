@@ -133,31 +133,52 @@ export function closeAllSheets() {
 
 function Sheet({ item }: { item: SheetItem }) {
   const ref = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ y0: number; y: number; t0: number } | null>(null);
+  // Swipe down to dismiss, from anywhere on the sheet (like iOS): a downward
+  // swipe closes it when the content is already scrolled to the top; when the
+  // content is scrolled down, the swipe scrolls it instead. Touch events are
+  // used for fingers (pointer events get cancelled by iOS scrolling); pointer
+  // events only for a mouse.
+  const drag = useRef<{ x0: number; y0: number; y: number; t0: number; active: boolean; fromBody: boolean; moved: boolean } | null>(null);
   const close = () => closeSheet(item.id);
   const [busy, setBusy] = useState(false);
 
-  // Drag the grabber/header down to dismiss, with rubber-banding upward.
-  const onDown = (e: PointerEvent) => {
-    if ((e.target as HTMLElement).closest("button")) return;
-    drag.current = { y0: e.clientY, y: 0, t0: performance.now() };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    if (ref.current) ref.current.style.transition = "none";
+  const begin = (x: number, y: number, target: EventTarget | null) => {
+    const el = target as HTMLElement | null;
+    if (el?.closest("input, textarea, select")) return; // let fields work normally
+    drag.current = { x0: x, y0: y, y: 0, t0: performance.now(), active: false, fromBody: !!el?.closest(".sheet-body"), moved: false };
   };
-  const onMove = (e: PointerEvent) => {
-    if (!drag.current || !ref.current) return;
-    const dy = e.clientY - drag.current.y0;
-    const y = dy < 0 ? -Math.sqrt(-dy) * 2 : dy;
-    drag.current.y = y;
-    ref.current.style.transform = `translate3d(0, ${y}px, 0)`;
+  const move = (x: number, y: number): boolean => {
+    const d = drag.current;
+    const el = ref.current;
+    if (!d || !el) return false;
+    const dy = y - d.y0;
+    const dx = x - d.x0;
+    if (!d.active) {
+      if (Math.abs(dy) < 8 || Math.abs(dy) < Math.abs(dx)) return false;
+      const body = el.querySelector<HTMLElement>(".sheet-body");
+      const atTop = !body || body.scrollTop <= 0;
+      if (dy < 0 || (d.fromBody && !atTop)) {
+        drag.current = null; // a normal scroll
+        return false;
+      }
+      d.active = true;
+      d.y0 = y;
+      el.style.transition = "none";
+    }
+    const off = y - d.y0;
+    const yy = off < 0 ? -Math.sqrt(-off) * 2 : off;
+    d.y = yy;
+    d.moved = true;
+    el.style.transform = `translate3d(0, ${yy}px, 0)`;
+    return true;
   };
-  const onUp = () => {
+  const end = () => {
     const d = drag.current;
     drag.current = null;
     const el = ref.current;
-    if (!d || !el) return;
+    if (!d || !el || !d.active) return;
     const v = d.y / Math.max(1, performance.now() - d.t0);
-    if (d.y > 120 || (v > 0.6 && d.y > 30)) {
+    if (d.y > 110 || (v > 0.5 && d.y > 30)) {
       el.style.setProperty("--drag-y", `${d.y}px`);
       el.style.transform = "";
       el.style.transition = "";
@@ -166,6 +187,44 @@ function Sheet({ item }: { item: SheetItem }) {
       el.style.transition = "transform 420ms cubic-bezier(0.34,1.56,0.64,1)";
       el.style.transform = "";
     }
+    // Swallow the click that would follow the drag.
+    const swallow = (e: Event) => {
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    el.addEventListener("click", swallow, { capture: true, once: true });
+    setTimeout(() => el.removeEventListener("click", swallow, { capture: true }), 350);
+  };
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ts = (e: TouchEvent) => begin(e.touches[0].clientX, e.touches[0].clientY, e.target);
+    const tm = (e: TouchEvent) => {
+      if (move(e.touches[0].clientX, e.touches[0].clientY)) e.preventDefault();
+    };
+    const te = () => end();
+    el.addEventListener("touchstart", ts, { passive: true });
+    el.addEventListener("touchmove", tm, { passive: false });
+    el.addEventListener("touchend", te);
+    el.addEventListener("touchcancel", te);
+    return () => {
+      el.removeEventListener("touchstart", ts);
+      el.removeEventListener("touchmove", tm);
+      el.removeEventListener("touchend", te);
+      el.removeEventListener("touchcancel", te);
+    };
+  }, []);
+
+  const onDown = (e: PointerEvent) => {
+    if (e.pointerType !== "mouse" || (e.target as HTMLElement).closest("button")) return;
+    begin(e.clientX, e.clientY, e.target);
+  };
+  const onMove = (e: PointerEvent) => {
+    if (e.pointerType === "mouse" && drag.current) move(e.clientX, e.clientY);
+  };
+  const onUp = (e: PointerEvent) => {
+    if (e.pointerType === "mouse") end();
   };
 
   useEffect(() => {
@@ -184,8 +243,11 @@ function Sheet({ item }: { item: SheetItem }) {
         role="dialog"
         aria-modal="true"
         aria-label={opts.title ?? "Sheet"}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
       >
-        <div onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} style="touch-action:none">
+        <div>
           <div class="sheet-grabber" />
           {!opts.bare && (
             <div class="sheet-head">

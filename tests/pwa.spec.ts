@@ -87,7 +87,7 @@ test("security: strict CSP meta, no inline scripts, no CSP violations, no remote
   expect(html).toContain('http-equiv="Content-Security-Policy"');
   expect(html).toMatch(/script-src 'self';/);
   expect(html).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/); // every script is external
-  for (const tab of ["Contacts", "Pipeline", "Money", "More"]) {
+  for (const tab of ["Pipeline", "Projects", "Money", "More"]) {
     await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: tab }).click();
     await page.waitForTimeout(450);
   }
@@ -186,9 +186,6 @@ test("export → erase → import round-trips with zero data loss, and stays XSS
     db.close();
   });
 
-  const before = canonical(await dumpDb(page));
-  const total = Object.values(before).reduce((a, r) => a + r.length, 0);
-  expect(total).toBeGreaterThan(200);
 
   // Render hostile strings in lists: nothing may execute.
   await page.goto("./#/contacts");
@@ -200,6 +197,11 @@ test("export → erase → import round-trips with zero data loss, and stays XSS
   expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined();
   // javascript: URLs never reach an href
   expect(await page.evaluate(() => [...document.querySelectorAll("a[href]")].filter((a) => a.getAttribute("href")!.startsWith("javascript:")).length)).toBe(0);
+
+  // Snapshot right before exporting (start-up fixes may have linked loan people to contacts on reload)
+  const before = canonical(await dumpDb(page));
+  const total = Object.values(before).reduce((a, r) => a + r.length, 0);
+  expect(total).toBeGreaterThan(200);
 
   // Export through the UI
   await page.goto("./#/settings");
@@ -367,7 +369,7 @@ test("contact form: typing a new company adds it to Companies, an existing one i
   expect(usman.companyId).toBe(zetas[0].id);
 });
 
-test("iPhone contacts: .vcf pick fills the form, bulk import skips existing people", async ({ page }) => {
+test("iPhone contacts: bulk .vcf import skips people you already have", async ({ page }) => {
   const vcf = [
     "BEGIN:VCARD", "VERSION:3.0", "N:Iqbal;Hamza;;;", "FN:Hamza Iqbal", "ORG:Iqbal Textiles;", "TITLE:Owner",
     "item1.TEL;type=CELL;type=pref:0301 2223334", "TEL;type=WORK:+92 42 1234567", "EMAIL;type=INTERNET:hamza@iqbal.pk", "END:VCARD",
@@ -378,19 +380,14 @@ test("iPhone contacts: .vcf pick fills the form, bulk import skips existing peop
   writeFileSync(join(__dirname, ".tmp/people.vcf"), vcf);
   writeFileSync(join(__dirname, ".tmp/hamza.vcf"), one);
 
-  // Single pick inside the contact form (Chromium has no Contact Picker → file fallback)
+  // Hamza already exists in the CRM (same mobile)
   await page.goto("./#/contacts");
   await page.getByRole("button", { name: "Create" }).click();
   await page.getByRole("dialog").last().getByRole("button", { name: "New contact", exact: true }).click();
-  await page.getByRole("dialog").last().getByRole("button", { name: "From iPhone contacts" }).click();
-  const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.getByRole("dialog").last().getByRole("button", { name: /Choose contact file/ }).click()]);
-  await fc.setFiles(join(__dirname, ".tmp/hamza.vcf"));
-  await page.getByRole("dialog").last().getByRole("button", { name: "0301 2223334" }).click(); // two numbers → choose
   const form = page.getByRole("dialog").last();
-  await expect(form.getByLabel("Name", { exact: true })).toHaveValue("Hamza Iqbal");
-  await expect(form.getByLabel("Phone")).toHaveValue("0301 2223334");
-  await expect(form.getByLabel("Email")).toHaveValue("hamza@iqbal.pk");
-  await expect(form.getByLabel("Company", { exact: true })).toHaveValue("Iqbal Textiles");
+  await expect(form.getByRole("button", { name: "From iPhone contacts" })).toHaveCount(0); // picker button removed
+  await form.getByLabel("Name", { exact: true }).fill("Hamza Iqbal");
+  await form.getByLabel("Phone").fill("0301 2223334");
   await form.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Hamza Iqbal" })).toBeVisible();
 
@@ -429,7 +426,7 @@ test("won flow: popup creates project, agreed total optional, advance into an ac
   await page.getByRole("button", { name: "New lead" }).click();
   const lead = page.getByRole("dialog").last();
   await lead.getByLabel("Name", { exact: true }).fill("Faisal Ahmed");
-  await lead.getByLabel("Phone").fill("0333 4445556");
+  await lead.getByLabel("Mobile").fill("0333 4445556");
   await lead.getByRole("button", { name: "Save", exact: true }).click();
   await page.getByText("Faisal Ahmed").first().click();
   await expect(page.getByText("No amount yet")).toBeVisible();
@@ -539,4 +536,169 @@ test("cash flow: add personal expense and business income, month totals update",
   await page.goto("./#/");
   await page.goto("./#/money");
   await expect(page.getByText("Saved Rs 46,300")).toBeVisible();
+});
+
+test("pipeline is Lead → Negotiation → Won; older installs are migrated without losing deals", async ({ page }) => {
+  await page.goto("./#/pipeline");
+  await expect(page.locator(".stage-strip .chip")).toHaveText([/Lead/, /Negotiation/, /Won/]);
+  // Simulate an old install: old default stages with deals in them, then restart.
+  await page.evaluate(async () => {
+    const db: IDBDatabase = await new Promise((res) => {
+      const r = indexedDB.open("covison-pocket");
+      r.onsuccess = () => res(r.result);
+    });
+    const tx = db.transaction(["stages", "deals", "meta"], "readwrite");
+    const t = new Date().toISOString();
+    const stages = await new Promise<{ id: string; pipelineId: string; name: string }[]>((res) => {
+      const q = tx.objectStore("stages").getAll();
+      q.onsuccess = () => res(q.result);
+    });
+    const pid = stages[0].pipelineId;
+    tx.objectStore("stages").put({ id: "old-q", pipelineId: pid, name: "Qualified", position: 1, isWon: false, isLost: false, createdAt: t, updatedAt: t });
+    tx.objectStore("stages").put({ id: "old-p", pipelineId: pid, name: "Proposal", position: 2, isWon: false, isLost: false, createdAt: t, updatedAt: t });
+    tx.objectStore("stages").put({ id: "old-l", pipelineId: pid, name: "Lost", position: 9, isWon: false, isLost: true, createdAt: t, updatedAt: t });
+    tx.objectStore("deals").put({ id: "dq", pipelineId: pid, stageId: "old-q", name: "Was qualified", value: 0, currency: "PKR", createdAt: t, updatedAt: t });
+    tx.objectStore("deals").put({ id: "dp", pipelineId: pid, stageId: "old-p", name: "Was proposal", value: 0, currency: "PKR", createdAt: t, updatedAt: t });
+    tx.objectStore("meta").put({ key: "migr.pipeline3", value: false });
+    await new Promise((r) => (tx.oncomplete = r));
+    db.close();
+  });
+  await page.reload();
+  await expect(page.locator(".stage-strip .chip")).toHaveText([/Lead\s*1/, /Negotiation\s*1/, /Won/]);
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  const name = (id: unknown) => db.stages.find((s) => s.id === id)?.name;
+  expect(name(db.deals.find((d) => d.id === "dq")!.stageId)).toBe("Lead");
+  expect(name(db.deals.find((d) => d.id === "dp")!.stageId)).toBe("Negotiation");
+  expect(db.stages.map((s) => s.name).sort()).toEqual(["Lead", "Negotiation", "Won"]);
+});
+
+test("lead form asks only name, mobile, company, position; company is created", async ({ page }) => {
+  await page.goto("./#/pipeline");
+  await page.getByRole("button", { name: "New lead" }).click();
+  const lead = page.getByRole("dialog").last();
+  await expect(lead.locator(".field label")).toHaveText(["Name", "Mobile", "Company", "Position"]);
+  await lead.getByLabel("Name", { exact: true }).fill("Sara Javed");
+  await lead.getByLabel("Mobile").fill("0300 7778889");
+  await lead.getByLabel("Company", { exact: true }).fill("Javed Foods");
+  await lead.getByLabel("Position").fill("Owner");
+  await lead.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText(/Lead added to Lead/)).toBeVisible();
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  const c = db.contacts.find((x) => x.name === "Sara Javed")!;
+  expect(c).toMatchObject({ phone: "0300 7778889", jobTitle: "Owner" });
+  expect(db.companies.find((x) => x.id === c.companyId)!.name).toBe("Javed Foods");
+  expect(db.deals.find((d) => d.contactId === c.id)).toBeTruthy();
+});
+
+test("projects: won lead appears as Not started; status, money received and expenses", async ({ page }) => {
+  await addAccount(page, "Meezan Bank", "Bank", "Business", "50000");
+  await page.goto("./#/pipeline");
+  await page.getByRole("button", { name: "New lead" }).click();
+  const lead = page.getByRole("dialog").last();
+  await lead.getByLabel("Name", { exact: true }).fill("Bilal Store");
+  await lead.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByText("Bilal Store").first().click();
+  await page.getByRole("button", { name: "Won" }).click();
+  const won = page.getByRole("dialog").last();
+  await won.getByLabel("Name", { exact: true }).fill("Bilal Store app");
+  await won.getByLabel("Total agreed (Rs)").fill("80000");
+  await won.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Project created")).toBeVisible();
+
+  await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Projects" }).click();
+  await expect(page.locator(".section", { hasText: "Not started" })).toContainText("Bilal Store app");
+  await page.locator(".screen.current").getByText("Bilal Store app").first().click();
+  await page.getByRole("button", { name: "In progress", exact: true }).click();
+
+  // Money received (into Meezan) and an expense on the project
+  await page.getByRole("button", { name: "Money received" }).first().click();
+  const pay = page.getByRole("dialog").last();
+  await pay.getByLabel("Amount (Rs)").fill("30000");
+  await pay.getByLabel("Into account").selectOption({ label: "Meezan Bank · Business" });
+  await pay.getByRole("button", { name: "Save", exact: true }).click();
+  await page.waitForTimeout(500);
+  await page.getByRole("button", { name: "Expense", exact: true }).click();
+  const exp = page.getByRole("dialog").last();
+  await exp.getByLabel("Amount (Rs)").fill("6000");
+  await exp.getByLabel("Paid from").selectOption({ label: "Meezan Bank · Business" });
+  await exp.getByRole("button", { name: "Save", exact: true }).click();
+  await page.waitForTimeout(500);
+
+  const cells = page.locator(".screen.current .pm-cell");
+  await expect(cells.nth(0)).toContainText("80,000");
+  await expect(cells.nth(1)).toContainText("30,000");
+  await expect(cells.nth(2)).toContainText("6,000");
+  await expect(cells.nth(3)).toContainText("50,000"); // still due
+  await expect(page.getByText(/Profit so far\s*Rs\s?24,000/)).toBeVisible();
+
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  const project = db.projects.find((p) => p.name === "Bilal Store app")!;
+  expect(project.status).toBe("in_progress");
+  expect(db.transactions.find((t) => t.type === "expense")).toMatchObject({ amount: 6000, projectId: project.id, scope: "business" });
+
+  // Home: ongoing projects; account balance 50,000 + 30,000 − 6,000
+  await page.goto("./#/");
+  await expect(page.getByText("Ongoing projects")).toBeVisible();
+  await expect(page.locator(".balance-hero .h-value")).toHaveText(/Rs\s?74,000/, { timeout: 4000 });
+});
+
+test("a personal loan to a new person creates a contact tagged Personal", async ({ page }) => {
+  await page.goto("./#/money");
+  await page.getByRole("button", { name: "Owed", exact: true }).click();
+  await page.getByRole("button", { name: "Loan", exact: true }).click();
+  const s = page.getByRole("dialog").last();
+  await s.getByLabel("Name", { exact: true }).fill("Usman Cousin");
+  await s.getByLabel("Phone").fill("0345 1231231");
+  await s.getByLabel("Amount (Rs)").fill("15000");
+  await s.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Usman Cousin added to Contacts")).toBeVisible();
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  const c = db.contacts.find((x) => x.name === "Usman Cousin")!;
+  expect(c.phone).toBe("0345 1231231");
+  expect(db.ledger.find((e) => e.personName === "Usman Cousin")!.contactId).toBe(c.id);
+  const tag = db.tags.find((t) => t.name === "Personal")!;
+  expect(db.contactTags.some((l) => l.contactId === c.id && l.tagId === tag.id)).toBe(true);
+});
+
+test("sheets close with a downward swipe (the + menu)", async ({ page }) => {
+  await page.goto("./#/");
+  await page.getByRole("button", { name: "Create" }).click();
+  const sheet = page.locator(".sheet-layer:not(.closing) .sheet");
+  await expect(sheet).toBeVisible();
+  await page.waitForTimeout(500);
+  await sheet.evaluate(async (el) => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    let y = r.top + 80;
+    const touch = (yy: number) => new Touch({ identifier: 1, target: el, clientX: x, clientY: yy });
+    const fire = (type: string, yy: number) =>
+      el.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, touches: type === "touchend" ? [] : [touch(yy)], changedTouches: [touch(yy)] }));
+    fire("touchstart", y);
+    for (let i = 0; i < 12; i++) {
+      y += 20;
+      fire("touchmove", y);
+      await new Promise((r) => setTimeout(r, 8));
+    }
+    fire("touchend", y);
+  });
+  await expect(page.locator(".sheet-layer")).toHaveCount(0, { timeout: 2000 });
+});
+
+test("amounts keep their decimals (paisa)", async ({ page }) => {
+  await addAccount(page, "Cash", "Cash", "Personal", "1000.75");
+  await page.goto("./#/money");
+  await page.getByRole("button", { name: "Cash flow", exact: true }).click();
+  await page.getByRole("button", { name: "Expense", exact: true }).click();
+  const s = page.getByRole("dialog").last();
+  await s.getByLabel("Amount (Rs)").fill("250.50");
+  await s.getByRole("button", { name: "Food", exact: true }).click();
+  await s.getByLabel("Paid from").selectOption({ label: "Cash · Personal" });
+  await s.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.locator(".screen.current").getByText("−Rs 250.50").first()).toBeVisible();
+  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  expect(db.transactions[0].amount).toBe(250.5);
+  expect(db.accounts[0].openingBalance).toBe(1000.75);
+  // 1,000.75 − 250.50 = 750.25
+  await page.getByRole("button", { name: "Accounts", exact: true }).click();
+  await expect(page.locator(".screen.current .balance-hero .h-value")).toHaveText(/Rs\s?750\.25/, { timeout: 4000 });
 });
