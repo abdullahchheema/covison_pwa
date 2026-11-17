@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { match, switchTab, tabOf, useRoute, type Direction } from "./lib/router";
 import { Icon, type IconName } from "./ui/icons";
 import { Overlays, actionSheet } from "./ui/overlay";
+import { DropDock } from "./ui/drag";
 import { Dashboard } from "./screens/Dashboard";
 import { ContactsList, ContactDetail } from "./screens/Contacts";
 import { CompaniesList, CompanyDetail } from "./screens/Companies";
@@ -101,7 +102,7 @@ function ScreenStack() {
 const TABS: { path: string; label: string; icon: IconName }[] = [
   { path: "/", label: "Home", icon: "home" },
   { path: "/pipeline", label: "Pipeline", icon: "pipeline" },
-  { path: "/projects", label: "Projects", icon: "folder" },
+  { path: "/projects", label: "Projects", icon: "briefcase" },
   { path: "/money", label: "Money", icon: "wallet" },
   { path: "/more", label: "More", icon: "grid" },
 ];
@@ -159,6 +160,8 @@ export function App() {
       <ScreenStack />
       <Fab />
       <TabBar />
+      {/* Top layer (outside the scrolling screens, above the tab bar): drag dock, sheets, toasts */}
+      <DropDock />
       <Overlays />
     </>
   );

@@ -314,7 +314,7 @@ function ProjectEditForm({ bind, existing, onCreated }: { bind: Binding; existin
       toast("Project updated");
     } else {
       const id = await saveProject({ name: n, contactId: contactId || undefined, description: optText(desc, MAX_LONG), status, agreed: total });
-      toast("Project created", { icon: "folder" });
+      toast("Project created", { icon: "briefcase" });
       onCreated?.(id);
     }
   };

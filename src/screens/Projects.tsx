@@ -1,23 +1,22 @@
-import { useEffect, useRef, useState } from "preact/hooks";
-import { db } from "../db/schema";
-import { deleteColumn, deleteProject, deleteTodo, moveTodo, reorderColumns, restoreSnapshot } from "../db/repo";
-import { useLive, useStoredState } from "../lib/hooks";
-import { back, navigate } from "../lib/router";
-import { Icon } from "../ui/icons";
-import { Badge, Empty, Row, Screen, Segmented, SkeletonList, SwipeRow } from "../ui/kit";
-import type { ProjectStatus } from "../db/schema";
-import { STATUS_LABEL, loadProject, loadProjects, setProjectStatus, type ProjectMoney, type ProjectRow } from "../db/projects";
-import { openProjectEditForm, openProjectMoneyForm } from "./moneyForms";
+// Projects: a board with three stages (Not started / In progress / Completed),
+// laid out like the deal pipeline — swipe between stages, long-press a card
+// and drag it onto another stage. Each project page shows its money.
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { db, type ProjectStatus } from "../db/schema";
+import { deleteProject } from "../db/repo";
+import { STATUS_LABEL, STATUS_ORDER, loadProject, loadProjects, setProjectStatus, type ProjectMoney, type ProjectRow } from "../db/projects";
+import { useLive } from "../lib/hooks";
 import { money, shortDate } from "../lib/format";
+import { back, navigate } from "../lib/router";
+import { Icon, type IconName } from "../ui/icons";
+import { Avatar, Badge, Empty, Row, Screen, Segmented, SwipeRow } from "../ui/kit";
+import { actionSheet, toast } from "../ui/overlay";
+import { Draggable } from "../ui/drag";
+import { openProjectEditForm, openProjectMoneyForm } from "./moneyForms";
 import { openTransactionForm } from "./forms";
-import type { IconName } from "../ui/icons";
-import { actionSheet, toast, undoToast } from "../ui/overlay";
-import { Draggable, DropDock } from "../ui/drag";
-import { openColumnForm, openTodoForm } from "./forms";
-import { TaskSection, Timeline, confirmDelete } from "./shared";
+import { Timeline, confirmDelete } from "./shared";
 
 const STAGE_TONE: Record<ProjectStatus, "neutral" | "brand" | "success"> = { not_started: "neutral", in_progress: "brand", completed: "success" };
-const STAGE_ICON: Record<ProjectStatus, IconName> = { not_started: "circle", in_progress: "refresh", completed: "checkCircle" };
 
 function ProjectMoneyLine({ m }: { m: ProjectMoney }) {
   return (
@@ -29,71 +28,101 @@ function ProjectMoneyLine({ m }: { m: ProjectMoney }) {
   );
 }
 
+/** Compact project row (used on Home under "Ongoing projects"). */
 export function ProjectRowItem({ r, i }: { r: ProjectRow; i: number }) {
   const next: ProjectStatus | undefined = r.status === "not_started" ? "in_progress" : r.status === "in_progress" ? "completed" : undefined;
-  const pct = r.money.agreed > 0 ? Math.min(1, r.money.received / r.money.agreed) : 0;
   return (
     <SwipeRow
       i={i}
-      actions={[
-        ...(next ? [{ label: next === "in_progress" ? "Start" : "Complete", icon: (next === "in_progress" ? "refresh" : "check") as IconName, tone: "success" as const, run: () => void setProjectStatus(r.project.id, next).then(() => toast(`${r.project.name}: ${STATUS_LABEL[next]}`)) }] : []),
-        ...(r.status === "completed" ? [{ label: "Reopen", icon: "refresh" as IconName, tone: "brand" as const, run: () => void setProjectStatus(r.project.id, "in_progress") }] : []),
-      ]}
+      actions={
+        next
+          ? [{ label: next === "in_progress" ? "Start" : "Complete", icon: (next === "in_progress" ? "refresh" : "check") as IconName, tone: "success" as const, run: () => void setProjectStatus(r.project.id, next).then(() => toast(`${r.project.name}: ${STATUS_LABEL[next]}`)) }]
+          : [{ label: "Reopen", icon: "refresh" as IconName, tone: "brand" as const, run: () => void setProjectStatus(r.project.id, "in_progress") }]
+      }
     >
       <Row
         onClick={() => navigate(`/projects/${r.project.id}`)}
-        lead={
-          <span class={`tile pstage ${r.status}`}>
-            <Icon name={STAGE_ICON[r.status]} size={16} stroke={2.4} />
-          </span>
-        }
+        lead={<Avatar name={r.client ?? r.project.name} />}
         title={r.project.name}
         sub={
           <span class="col" style="gap:3px">
-            <span class="truncate">{r.client ?? "No client"}</span>
+            <span class="row gap8 truncate">
+              <Badge tone={STAGE_TONE[r.status]} dot>
+                {STATUS_LABEL[r.status]}
+              </Badge>
+              <span class="truncate">{r.client ?? "No client"}</span>
+            </span>
             <ProjectMoneyLine m={r.money} />
           </span>
-        }
-        trail={
-          r.money.agreed > 0 ? (
-            <span class="col" style="align-items:flex-end;gap:4px;flex-shrink:0">
-              <span class="t-subhead num" style="font-weight:600">{money(r.money.agreed, "PKR", r.money.agreed >= 1_000_000)}</span>
-              <span class="mini-track">
-                <span style={{ width: `${pct * 100}%` }} />
-              </span>
-            </span>
-          ) : undefined
         }
       />
     </SwipeRow>
   );
 }
 
+/** The card shown on the board (same information as the row, in card form). */
+function ProjectCard({ r }: { r: ProjectRow }) {
+  const m = r.money;
+  const pct = m.agreed > 0 ? Math.min(1, m.received / m.agreed) : 0;
+  return (
+    <>
+      <div class="row gap12" style="align-items:flex-start">
+        <Avatar name={r.client ?? r.project.name} />
+        <div class="grow">
+          <p class="t-headline clamp2">{r.project.name}</p>
+          <p class="t-footnote c2 truncate">{r.client ?? "No client"}</p>
+        </div>
+        {m.agreed > 0 && <span class="t-subhead num" style="font-weight:700;flex-shrink:0">{money(m.agreed)}</span>}
+      </div>
+      {m.agreed > 0 && (
+        <div class="bar-track mt12" style="height:6px">
+          <div class="bar-fill won" style={{ width: `${Math.max(m.received > 0 ? 3 : 0, pct * 100)}%` }} />
+        </div>
+      )}
+      <div class="mt8">
+        <ProjectMoneyLine m={m} />
+      </div>
+    </>
+  );
+}
+
 export function ProjectsList() {
   const rows = useLive(loadProjects, []);
-  const [showDone, setShowDone] = useStoredState<boolean>("projects.showDone", false);
-  const by = (st: ProjectStatus) => (rows ?? []).filter((r) => r.status === st);
+  const [page, setPage] = useState(1); // open on "In progress"
+  const pager = useRef<HTMLDivElement>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  const by = useMemo(() => {
+    const m = new Map<ProjectStatus, ProjectRow[]>(STATUS_ORDER.map((s) => [s, []]));
+    (rows ?? []).forEach((r) => m.get(r.status)?.push(r));
+    return m;
+  }, [rows]);
   const active = (rows ?? []).filter((r) => r.status !== "completed");
   const totals = active.reduce((t, r) => ({ due: t.due + r.money.due, received: t.received + r.money.received, spent: t.spent + r.money.spent }), { due: 0, received: 0, spent: 0 });
-  let i = 0;
-  const section = (st: ProjectStatus, list: ProjectRow[]) =>
-    list.length > 0 && (
-      <section class="section" key={st}>
-        <div class="section-head">
-          <h2 class="row gap8">
-            <Badge tone={STAGE_TONE[st]} dot>
-              {STATUS_LABEL[st]}
-            </Badge>
-            <span class="t-subhead c3 num">{list.length}</span>
-          </h2>
-        </div>
-        <div class="group">
-          {list.map((r) => (
-            <ProjectRowItem key={r.project.id} r={r} i={i++} />
-          ))}
-        </div>
-      </section>
-    );
+  const zones = STATUS_ORDER.map((s) => ({ id: s, label: STATUS_LABEL[s], sub: String(by.get(s)?.length ?? 0) }));
+  const ready = rows !== undefined && rows.length > 0;
+
+  useEffect(() => {
+    const el = pager.current;
+    if (!el) return;
+    // Start on "In progress" (the middle column).
+    const pane = el.children[1] as HTMLElement | undefined;
+    if (pane) el.scrollLeft = pane.offsetLeft - 16;
+    const onScroll = () => {
+      const w = (el.firstElementChild as HTMLElement | null)?.offsetWidth ?? el.clientWidth;
+      const p = Math.round(el.scrollLeft / (w + 12));
+      setPage((old) => (old === p ? old : p));
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [ready]);
+  useEffect(() => {
+    strip.current?.children[page]?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  }, [page]);
+  const goTo = (i: number) => {
+    const el = pager.current;
+    const pane = el?.children[i] as HTMLElement | undefined;
+    if (el && pane) el.scrollTo({ left: pane.offsetLeft - 16, behavior: "smooth" });
+  };
 
   return (
     <Screen
@@ -105,18 +134,20 @@ export function ProjectsList() {
         </button>
       }
     >
-      <div class="content">
-        {!rows ? (
-          <SkeletonList rows={4} />
-        ) : rows.length === 0 ? (
-          <Empty
-            icon="folder"
-            title="No projects yet"
-            text="When a lead is won, its project appears here automatically. You can also add one yourself."
-            action={<button class="btn primary sm press" onClick={() => openProjectEditForm()}>New project</button>}
-          />
-        ) : (
-          <>
+      {!rows ? (
+        <div class="content">
+          <div class="skel" style="height:320px;border-radius:22px" />
+        </div>
+      ) : rows.length === 0 ? (
+        <Empty
+          icon="briefcase"
+          title="No projects yet"
+          text="When a lead is won, its project appears here automatically. You can also add one yourself."
+          action={<button class="btn primary sm press" onClick={() => openProjectEditForm()}>New project</button>}
+        />
+      ) : (
+        <>
+          <div class="content">
             <div class="money-cards" style="grid-template-columns:repeat(3,1fr)">
               <div class="metric">
                 <span class="m-label">Still due</span>
@@ -131,87 +162,98 @@ export function ProjectsList() {
                 <span class="m-value t-metric c-danger" style="font-size:18px">{money(totals.spent, "PKR", totals.spent >= 1_000_000)}</span>
               </div>
             </div>
-            {section("not_started", by("not_started"))}
-            {section("in_progress", by("in_progress"))}
-            {by("completed").length > 0 && (
-              <section class="section">
-                <button class="section-head" style="width:100%" onClick={() => setShowDone(!showDone)}>
-                  <h2 class="row gap8">
-                    <Badge tone="success" dot>
-                      Completed
+          </div>
+          <div class="stage-strip mt16" ref={strip}>
+            {STATUS_ORDER.map((s, i) => (
+              <button key={s} class="chip press" aria-pressed={page === i} onClick={() => goTo(i)}>
+                {STATUS_LABEL[s]}
+                <span class="count">{by.get(s)?.length ?? 0}</span>
+              </button>
+            ))}
+          </div>
+          <div class="pager" ref={pager}>
+            {STATUS_ORDER.map((s) => {
+              const list = by.get(s) ?? [];
+              const due = list.reduce((t, r) => t + r.money.due, 0);
+              return (
+                <section class="pane" key={s} aria-label={STATUS_LABEL[s]}>
+                  <div class="pane-head">
+                    <Badge tone={STAGE_TONE[s]} dot>
+                      {STATUS_LABEL[s]}
                     </Badge>
-                    <span class="t-subhead c3 num">{by("completed").length}</span>
-                  </h2>
-                  <span class="link">{showDone ? "Hide" : "Show"}</span>
-                </button>
-                {showDone && (
-                  <div class="group">
-                    {by("completed").map((r) => (
-                      <ProjectRowItem key={r.project.id} r={r} i={i++} />
-                    ))}
+                    {due > 0 && <span class="t-subhead c2 num">{money(due, "PKR", true)} due</span>}
                   </div>
-                )}
-              </section>
-            )}
-            <p class="t-footnote c3" style="text-align:center;padding:14px 8px 0">Swipe a project left to start or complete it.</p>
-          </>
-        )}
-      </div>
+                  <div class="pane-body" data-stage={s}>
+                    {list.length === 0 ? (
+                      <p class="t-subhead c3" style="padding:28px 8px;text-align:center">
+                        {s === "not_started" ? "Won leads land here." : "Nothing here. Hold a project and drag it to this stage."}
+                      </p>
+                    ) : (
+                      list.map((r, i) => (
+                        <div key={r.project.id} class="rise" style={{ "--i": i } as never}>
+                          <Draggable
+                            itemId={r.project.id}
+                            zones={zones}
+                            currentZone={s}
+                            onTap={() => navigate(`/projects/${r.project.id}`)}
+                            onDrop={async (z) => {
+                              await setProjectStatus(r.project.id, z as ProjectStatus);
+                              toast(`${r.project.name}: ${STATUS_LABEL[z as ProjectStatus]}`, { icon: z === "completed" ? "checkCircle" : "arrowRight" });
+                            }}
+                          >
+                            <ProjectCard r={r} />
+                          </Draggable>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+          <div class="dots" aria-hidden="true">
+            {STATUS_ORDER.map((s, i) => (
+              <span key={s} class={i === page ? "on" : ""} />
+            ))}
+          </div>
+          <p class="t-footnote c3" style="text-align:center;padding:10px 24px 0">Hold a project to drag it to another stage</p>
+        </>
+      )}
     </Screen>
   );
 }
 
+// ---------------- project page ----------------
 export function ProjectBoard({ id }: { id: string }) {
   const data = useLive(async () => {
-    const p = await db.projects.get(id);
-    if (!p) return null;
-    const [columns, todos] = await Promise.all([db.projectColumns.where("projectId").equals(id).sortBy("position"), db.projectTodos.where("projectId").equals(id).sortBy("position")]);
-    const client = p.contactId ? await db.contacts.get(p.contactId) : undefined;
     const row = await loadProject(id);
+    if (!row) return null;
     const accounts = new Map((await db.accounts.toArray()).map((a) => [a.id, a.name]));
-    return { p, columns, todos, client, row: row!, accounts };
+    return { row, accounts };
   }, [id]);
-  const pager = useRef<HTMLDivElement>(null);
-  const [page, setPage] = useState(0);
-  useEffect(() => {
-    const el = pager.current;
-    if (!el) return;
-    const onScroll = () => {
-      const w = (el.firstElementChild as HTMLElement | null)?.offsetWidth ?? el.clientWidth;
-      setPage(Math.round(el.scrollLeft / (w + 12)));
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [data?.columns.length]);
 
   if (data === undefined) return <Screen title="" backLabel="Projects" large={false}><div /></Screen>;
   if (data === null)
     return (
       <Screen title="Project" backLabel="Back" large={false}>
-        <Empty icon="folder" title="Project not found" />
+        <Empty icon="briefcase" title="Project not found" />
       </Screen>
     );
-  const { p, columns, todos, client, row, accounts } = data;
+  const { row, accounts } = data;
+  const p = row.project;
   const m = row.money;
   const status = row.status;
-  const zones = columns.map((c) => ({ id: c.id, label: c.name, sub: String(todos.filter((t) => t.columnId === c.id).length) }));
-  const move = async (i: number, dir: -1 | 1) => {
-    const ids = columns.map((c) => c.id);
-    const j = i + dir;
-    if (j < 0 || j >= ids.length) return;
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-    await reorderColumns(ids);
-  };
+  const addExpense = () => openTransactionForm(undefined, { type: "expense", scope: "business", projectId: p.id, contactId: p.contactId, category: "Project costs" });
 
   return (
     <Screen
       title={p.name}
       subtitle={
-        (client || p.dealId) && (
+        (row.client || p.dealId) && (
           <span class="row gap8 wrap">
-            {client && (
-              <button class="c-brand" onClick={() => navigate(`/contacts/${client.id}`)}>
-                {client.name}
+            {row.client && p.contactId && (
+              <button class="c-brand" onClick={() => navigate(`/contacts/${p.contactId}`)}>
+                {row.client}
               </button>
             )}
             {p.dealId && (
@@ -232,8 +274,7 @@ export function ProjectBoard({ id }: { id: string }) {
             onClick={() =>
               actionSheet([
                 { label: "Edit project", icon: "edit", run: () => openProjectEditForm(p) },
-                { label: "Add to-do column", icon: "columns", run: () => openColumnForm(p.id, undefined, columns.length) },
-                { label: "Delete project", icon: "trash", destructive: true, run: () => void confirmDelete("project", () => deleteProject(p.id), () => back("/projects"), "All its columns, to-dos, tasks and notes are removed.") },
+                { label: "Delete project", icon: "trash", destructive: true, run: () => void confirmDelete("project", () => deleteProject(p.id), () => back("/projects"), "Its notes are removed. Money received and spent stays in your accounts.") },
               ])
             }
           >
@@ -245,8 +286,7 @@ export function ProjectBoard({ id }: { id: string }) {
             onClick={() =>
               actionSheet([
                 { label: "Money received", icon: "arrowDownLeft", run: () => void openProjectMoneyForm(p, m.received) },
-                { label: "Expense on this project", icon: "arrowUpRight", run: () => openTransactionForm(undefined, { type: "expense", scope: "business", projectId: p.id, contactId: p.contactId, category: "Project costs" }) },
-                { label: "To-do", icon: "tasks", run: () => openTodoForm(p.id, columns, undefined, columns[page]?.id) },
+                { label: "Expense on this project", icon: "arrowUpRight", run: addExpense },
               ])
             }
           >
@@ -259,11 +299,7 @@ export function ProjectBoard({ id }: { id: string }) {
         <Segmented<ProjectStatus>
           value={status}
           onChange={(v) => void setProjectStatus(p.id, v).then(() => toast(STATUS_LABEL[v], { icon: v === "completed" ? "checkCircle" : "refresh" }))}
-          options={[
-            { value: "not_started", label: "Not started" },
-            { value: "in_progress", label: "In progress" },
-            { value: "completed", label: "Completed" },
-          ]}
+          options={STATUS_ORDER.map((s) => ({ value: s, label: STATUS_LABEL[s] }))}
         />
 
         <div class="card rise mt12" style={{ "--i": 0 } as never}>
@@ -300,7 +336,7 @@ export function ProjectBoard({ id }: { id: string }) {
             <button class="btn sm grow press" style="background:var(--success-soft);color:var(--success)" onClick={() => void openProjectMoneyForm(p, m.received)}>
               <Icon name="plus" size={16} /> Money received
             </button>
-            <button class="btn sm grow press" style="background:var(--danger-soft);color:var(--danger)" onClick={() => openTransactionForm(undefined, { type: "expense", scope: "business", projectId: p.id, contactId: p.contactId, category: "Project costs" })}>
+            <button class="btn sm grow press" style="background:var(--danger-soft);color:var(--danger)" onClick={addExpense}>
               <Icon name="plus" size={16} /> Expense
             </button>
           </div>
@@ -342,101 +378,6 @@ export function ProjectBoard({ id }: { id: string }) {
           )}
         </section>
 
-        <div class="section-head section">
-          <h2>To-dos</h2>
-          <button class="link" onClick={() => openTodoForm(p.id, columns, undefined, columns[page]?.id)}>
-            Add
-          </button>
-        </div>
-      </div>
-      {columns.length === 0 ? (
-        <Empty icon="columns" title="No columns" action={<button class="btn primary sm press" onClick={() => openColumnForm(p.id, undefined, 0)}>Add column</button>} />
-      ) : (
-        <>
-          <div class="pager" ref={pager}>
-            {columns.map((c, ci) => {
-              const items = todos.filter((t) => t.columnId === c.id);
-              return (
-                <section class="pane" key={c.id}>
-                  <div class="pane-head">
-                    <span class="t-headline">
-                      {c.name} <span class="c3 num">{items.length}</span>
-                    </span>
-                    <button
-                      class="c3"
-                      aria-label={`Column ${c.name} options`}
-                      onClick={() =>
-                        actionSheet(
-                          [
-                            { label: "Add to-do here", icon: "plus", run: () => openTodoForm(p.id, columns, undefined, c.id) },
-                            { label: "Rename", icon: "edit", run: () => openColumnForm(p.id, c) },
-                            ...(ci > 0 ? [{ label: "Move left", icon: "arrowLeft" as const, run: () => void move(ci, -1) }] : []),
-                            ...(ci < columns.length - 1 ? [{ label: "Move right", icon: "arrowRight" as const, run: () => void move(ci, 1) }] : []),
-                            { label: "Delete column", icon: "trash", destructive: true, run: () => void confirmDelete("column", () => deleteColumn(c.id), undefined, items.length ? `Its ${items.length} to-dos are deleted too.` : undefined) },
-                          ],
-                          c.name,
-                        )
-                      }
-                    >
-                      <Icon name="more" size={22} />
-                    </button>
-                  </div>
-                  <div class="pane-body">
-                    {items.length === 0 ? (
-                      <button class="t-subhead c3 press" style="padding:24px 8px;text-align:center" onClick={() => openTodoForm(p.id, columns, undefined, c.id)}>
-                        Empty. Tap to add a to-do.
-                      </button>
-                    ) : (
-                      items.map((t, i) => (
-                        <div key={t.id} class="rise" style={{ "--i": i } as never}>
-                          <Draggable
-                            itemId={t.id}
-                            zones={zones}
-                            currentZone={c.id}
-                            onTap={() =>
-                              actionSheet(
-                                [
-                                  { label: "Edit", icon: "edit", run: () => openTodoForm(p.id, columns, t) },
-                                  ...columns.filter((x) => x.id !== c.id).map((x) => ({ label: `Move to ${x.name}`, icon: "arrowRight" as const, run: () => void moveTodo(t.id, x.id) })),
-                                  {
-                                    label: "Delete",
-                                    icon: "trash",
-                                    destructive: true,
-                                    run: async () => {
-                                      const snap = await deleteTodo(t.id);
-                                      undoToast("To-do deleted", () => restoreSnapshot(snap));
-                                    },
-                                  },
-                                ],
-                                t.title,
-                              )
-                            }
-                            onDrop={async (z) => {
-                              await moveTodo(t.id, z);
-                              toast(`Moved to ${columns.find((x) => x.id === z)?.name}`, { icon: "arrowRight" });
-                            }}
-                          >
-                            <p class="t-callout" style="font-weight:500">{t.title}</p>
-                            {t.description && <p class="t-footnote c2 clamp2 mt4">{t.description}</p>}
-                          </Draggable>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </section>
-              );
-            })}
-          </div>
-          <div class="dots" aria-hidden="true">
-            {columns.map((c, i) => (
-              <span key={c.id} class={i === page ? "on" : ""} />
-            ))}
-          </div>
-        </>
-      )}
-
-      <div class="content">
-        <TaskSection parent={{ projectId: p.id }} />
         <section class="section">
           <div class="section-head">
             <h2>Notes</h2>
@@ -444,7 +385,6 @@ export function ProjectBoard({ id }: { id: string }) {
           <Timeline parent={{ projectId: p.id }} />
         </section>
       </div>
-      <DropDock />
     </Screen>
   );
 }

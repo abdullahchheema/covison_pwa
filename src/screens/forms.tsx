@@ -134,6 +134,8 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
     niche: c.niche ?? "",
   });
   const [custom, setCustom] = useState<Record<string, string | number | boolean>>(c.customFields ?? {});
+  const hasExtras = !!existing && !!(existing.email || existing.priority || existing.leadTypeId || existing.expectedRevenue || existing.linkedinUrl || existing.website || existing.city || existing.country || existing.niche);
+  const [showMore, setShowMore] = useState(hasExtras);
   const [tagIds, setTagIds] = useState<string[] | null>(null);
   const set = (k: keyof typeof f) => (v: string) => setF((p) => ({ ...p, [k]: v }));
 
@@ -193,9 +195,7 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
     <div class="form">
       <Group>
         <TextField label="Name" value={f.name} onInput={set("name")} placeholder="Required" autoFocus={!existing} />
-        <TextField label="Email" value={f.email} onInput={set("email")} type="email" inputMode="email" />
-        <TextField label="Phone" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" />
-        <TextField label="Job title" value={f.jobTitle} onInput={set("jobTitle")} />
+        <TextField label="Mobile" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" placeholder="0300 1234567" />
         <CompanyField
           value={companyName}
           onInput={(v) => {
@@ -203,6 +203,16 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
             set("companyName")(v);
           }}
         />
+        <TextField label="Position" value={f.jobTitle} onInput={set("jobTitle")} placeholder="e.g. Owner, Manager" />
+      </Group>
+      {!showMore ? (
+        <button class="btn plain block press" onClick={() => setShowMore(true)}>
+          <Icon name="plus" size={18} /> More details (email, tags, notes…)
+        </button>
+      ) : (
+      <>
+      <Group>
+        <TextField label="Email" value={f.email} onInput={set("email")} type="email" inputMode="email" />
       </Group>
       <Group label="Lead">
         <SelectField label="Status" value={f.status} placeholder={false} onChange={set("status")} options={CONTACT_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))} />
@@ -248,6 +258,8 @@ function ContactForm({ bind, existing, defaults }: { bind: Binding; existing?: C
         <TextField label="Country" value={f.country} onInput={set("country")} />
         <TextField label="Niche" value={f.niche} onInput={set("niche")} />
       </Group>
+      </>
+      )}
     </div>
   );
 }
@@ -883,10 +895,15 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
         value={f.kind}
         onChange={set("kind")}
         options={[
-          { value: "loan", label: "Personal loan" },
-          { value: "credit", label: "Credit (business)" },
+          { value: "loan", label: "Loan (personal)" },
+          { value: "credit", label: "Client credit" },
         ]}
       />
+      <p class="t-footnote c3" style="padding:0 4px;margin-top:-10px">
+        {f.kind === "loan"
+          ? "Money lent or borrowed, even if it came from a business account. Counts under Personal."
+          : "A client or supplier owes for work or goods sold on credit. Counts under Business."}
+      </p>
       <Group label="Who" footer="Pick a contact, or type a new name and number; they're added to Contacts automatically.">
         <SelectField label="Contact" value={f.contactId} onChange={set("contactId")} placeholder="Not a contact" options={(contacts ?? []).map((x) => ({ value: x.id, label: x.name }))} />
         {!f.contactId && <TextField label="Name" value={f.personName} onInput={set("personName")} placeholder="Required" />}

@@ -12,7 +12,7 @@ import { Icon } from "../ui/icons";
 import { Avatar, Badge, Empty, Group, Row, Screen, SearchField, useDebounced } from "../ui/kit";
 import { actionSheet, toast } from "../ui/overlay";
 import { openWhatsApp, waHref } from "../lib/whatsapp";
-import { Draggable, DropDock } from "../ui/drag";
+import { Draggable } from "../ui/drag";
 import { openDealForm, openLeadForm, openTransactionForm } from "./forms";
 import { openDealPaymentForm, openWonForm } from "./moneyForms";
 import { TaskSection, Timeline, confirmDelete } from "./shared";
@@ -200,7 +200,7 @@ export function Pipeline() {
                                 class="c3"
                                 aria-label="Move deal"
                                 style="margin:-6px -6px 0 0;padding:6px"
-                                onPointerDown={(e) => e.stopPropagation()}
+                                data-nodrag
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   moveSheet(d, board.stages);
@@ -222,7 +222,7 @@ export function Pipeline() {
                                   tabIndex={0}
                                   class="wa-chip press"
                                   aria-label={`WhatsApp ${board.contact.get(d.contactId) ?? ""}`}
-                                  onPointerDown={(e) => e.stopPropagation()}
+                                  data-nodrag
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     openWhatsApp(board.phone.get(d.contactId!));
@@ -270,7 +270,6 @@ export function Pipeline() {
           <p class="t-footnote c3" style="text-align:center;padding:10px 24px 0">Hold a deal to drag it to another stage</p>
         </>
       )}
-      <DropDock />
     </Screen>
   );
 }
@@ -458,9 +457,9 @@ export function DealDetail({ id }: { id: string }) {
             />
           )}
           {project ? (
-            <Row title={project.name} sub={project.description ? `project · ${project.description}` : "project board"} lead={<span class="tile orange"><Icon name="folder" size={16} /></span>} onClick={() => navigate(`/projects/${project.id}`)} />
+            <Row title={project.name} sub={project.description ? `project · ${project.description}` : "project board"} lead={<span class="tile violet"><Icon name="briefcase" size={16} /></span>} onClick={() => navigate(`/projects/${project.id}`)} />
           ) : (
-            stage?.isWon && <Row title="Set up the project" sub="name, description, agreed total, advance" lead={<span class="tile orange"><Icon name="folder" size={16} /></span>} onClick={() => openWonForm(d)} />
+            stage?.isWon && <Row title="Set up the project" sub="name, description, agreed total, advance" lead={<span class="tile violet"><Icon name="briefcase" size={16} /></span>} onClick={() => openWonForm(d)} />
           )}
           {receivable && (
             <Row title={receivable.settledAt ? "Credit entry · paid in full" : "Credit entry · track payments"} sub="money" lead={<span class="tile green"><Icon name="wallet" size={16} /></span>} onClick={() => navigate(`/money/${receivable.id}`)} />

@@ -340,6 +340,9 @@ export async function owedSummary() {
     personal: sort(personal),
     iOwe: sort(iOwe),
     businessTotal: total(business),
+    // Count people, not lines: one client with two projects is one client.
+    businessPeople: new Set(business.map((l) => l.title.trim().toLowerCase())).size,
+    personalPeople: new Set(personal.map((l) => l.title.trim().toLowerCase())).size,
     personalTotal: total(personal),
     iOweTotal: total(iOwe),
     unagreed: projects.filter((p) => p.agreed === 0).length,

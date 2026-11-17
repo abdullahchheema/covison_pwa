@@ -94,7 +94,7 @@ export function OwedCard() {
           </span>
           <span class="mc-value t-metric">{money(b)}</span>
           <span class="mc-sub">
-            {o.business.length} client{o.business.length === 1 ? "" : "s"}
+            {o.businessPeople} client{o.businessPeople === 1 ? "" : "s"}
             {o.unagreed > 0 ? ` · ${o.unagreed} total not agreed` : ""}
           </span>
         </button>
@@ -107,7 +107,7 @@ export function OwedCard() {
           </span>
           <span class="mc-value t-metric">{money(p)}</span>
           <span class="mc-sub">
-            {o.personal.length} {o.personal.length === 1 ? "person" : "people"}
+            {o.personalPeople} {o.personalPeople === 1 ? "person" : "people"}
           </span>
         </button>
       </div>

@@ -364,3 +364,23 @@ These features are new in the PWA. They didn't exist in the web CRM.
 - **Sheets:** close with a downward swipe from anywhere on the sheet (when its content is scrolled to the top), not just the small grab bar.
 - **Money:** amounts keep and show their decimals (e.g. Rs 1,250.50). Totals and dues are rounded to paisa, and animated numbers count up without decimal flicker.
 - **Restoring a backup:** the one-time fixes run only for backups from an older app version. A current backup is restored exactly.
+
+### Projects board, drag fix, and smaller changes
+- **Projects board:** the Projects tab is a board like the Pipeline, with Not started / In progress / Completed columns. You can swipe between columns or tap the stage chips, and long-press a project card to drag it to another stage.
+  - Cards show the client, agreed total, a paid progress bar, and received / spent / due.
+  - To-dos are removed from projects (the board and the project page). The old data stays in the database but isn't shown.
+- **Drag on iPhone:**
+  - Rewritten with touch events: hold about 0.35 s, the card lifts, drag it onto a stage in the dock.
+  - Scrolling is blocked only once the card has lifted. A quick swipe still scrolls, and a tap still opens the card.
+  - The drop dock is drawn at the app's top layer. Inside the scrolling screen it was clipped and covered, so drops never landed.
+- **Icons:** the project folder icon is gone. Projects use the client's initials, and the tab uses a briefcase.
+- **Money → Owed:**
+  - Spacing fixed between the amount cards and the chips. `.chips` no longer overrides the top margin.
+  - Project rows show the client's avatar and name.
+  - "Clients" counts distinct people.
+- **Loan vs credit:**
+  - The form now labels the choice "Loan (personal)" or "Client credit", with a one-line explanation of each.
+  - An entry's ⋯ menu can switch it between the two with one tap.
+  - "Add" on a contact asks: loan given, loan taken, or client credit.
+- **Open pipeline on Home:** open deals plus money agreed on won projects that hasn't been received yet.
+- **Contact form:** shows Name, Mobile, Company and Position by default. Everything else is behind "More details", which opens automatically when you edit a contact that already has extra details.

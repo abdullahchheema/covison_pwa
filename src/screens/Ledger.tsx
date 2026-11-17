@@ -2,7 +2,7 @@
 // deals), credit purchases, and personal loans in both directions.
 import { useMemo, useState } from "preact/hooks";
 import { db, type LedgerEntry } from "../db/schema";
-import { deleteLedgerEntry, deletePayment, restoreSnapshot, settleEntry, withBalance, type EntryWithBalance } from "../db/repo";
+import { deleteLedgerEntry, deletePayment, restoreSnapshot, saveLedgerEntry, settleEntry, withBalance, type EntryWithBalance } from "../db/repo";
 import { useCountUp, useLive, useStoredState } from "../lib/hooks";
 import { money, shortDate } from "../lib/format";
 import { back, navigate, switchTab } from "../lib/router";
@@ -188,6 +188,7 @@ function OwedView() {
   const all = useLive(loadLedger, []);
   const summary = useLive(owedSummary, []);
   const projects = useLive(wonDealMoney, []);
+  const clientNames = useLive(async () => new Map((await db.contacts.toArray()).map((c) => [c.id, c.name])), []);
   const [view, setView] = useStoredState<OwedTab>("owed.tab", "business");
 
   const ledgerRows = useMemo(() => {
@@ -228,7 +229,7 @@ function OwedView() {
           <Icon name="plus" size={15} /> Loan
         </button>
         <button class="chip press" onClick={() => openLedgerForm(undefined, { kind: "credit", direction: view === "iowe" ? "out" : "in" })}>
-          <Icon name="plus" size={15} /> Credit
+          <Icon name="plus" size={15} /> Client credit
         </button>
       </div>
 
@@ -254,9 +255,9 @@ function OwedView() {
               key={p.deal.id}
               i={i++}
               onClick={() => navigate(`/deals/${p.deal.id}`)}
-              lead={<span class="tile orange"><Icon name="folder" size={16} /></span>}
-              title={p.deal.name}
-              sub={p.agreed === 0 ? `Total not agreed · received ${money(p.received)}` : `Received ${money(p.received)} of ${money(p.agreed)}`}
+              lead={<Avatar name={(p.deal.contactId && clientNames?.get(p.deal.contactId)) || p.deal.name} />}
+              title={(p.deal.contactId && clientNames?.get(p.deal.contactId)) || p.deal.name}
+              sub={p.agreed === 0 ? `${p.deal.name} · total not agreed · received ${money(p.received)}` : `${p.deal.name} · received ${money(p.received)} of ${money(p.agreed)}`}
               trail={<span class={`num t-headline ${p.agreed === 0 ? "c3" : "c-success"}`} style="flex-shrink:0">{p.agreed === 0 ? "—" : money(p.due)}</span>}
               chevron={false}
             />
@@ -310,6 +311,9 @@ export function LedgerDetail({ id }: { id: string }) {
             aria-label="Options"
             onClick={() =>
               actionSheet([
+                e.kind === "credit"
+                  ? { label: "Change to personal loan", icon: "users", run: () => void saveLedgerEntry({ ...e, kind: "loan" }).then(() => toast("Now a personal loan", { icon: "users" })) }
+                  : { label: "Change to client credit (business)", icon: "briefcase", run: () => void saveLedgerEntry({ ...e, kind: "credit" }).then(() => toast("Now client credit", { icon: "briefcase" })) },
                 { label: "Delete entry", icon: "trash", destructive: true, run: () => void confirmDelete("entry", () => deleteLedgerEntry(e.id), () => back("/money"), "Its payment history is removed too.") },
               ])
             }
@@ -433,7 +437,16 @@ export function ContactMoney({ contactId, name, phone }: { contactId: string; na
     <section class="section">
       <div class="section-head">
         <h2>Money</h2>
-        <button class="link" onClick={() => openLedgerForm(undefined, { contactId, personName: name, phone, direction: "in", kind: "credit" })}>
+        <button
+          class="link"
+          onClick={() =>
+            actionSheet([
+              { label: `Loan given to ${name.split(" ")[0]}`, icon: "arrowUpRight", run: () => openLedgerForm(undefined, { contactId, personName: name, phone, direction: "in", kind: "loan" }) },
+              { label: `Loan taken from ${name.split(" ")[0]}`, icon: "arrowDownLeft", run: () => openLedgerForm(undefined, { contactId, personName: name, phone, direction: "out", kind: "loan" }) },
+              { label: `${name.split(" ")[0]} owes for work / goods (credit)`, icon: "briefcase", run: () => openLedgerForm(undefined, { contactId, personName: name, phone, direction: "in", kind: "credit" }) },
+            ])
+          }
+        >
           Add
         </button>
       </div>

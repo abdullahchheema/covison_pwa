@@ -522,7 +522,9 @@
   gap: 8px;
   overflow-x: auto;
   padding: 2px var(--gutter) 10px;
-  margin: 0 calc(var(--gutter) * -1);
+  /* only the sides, so spacing helpers like .mt12 above the chips still apply */
+  margin-left: calc(var(--gutter) * -1);
+  margin-right: calc(var(--gutter) * -1);
   scrollbar-width: none;
   scroll-snap-type: x proximity;
 }
@@ -1243,7 +1245,7 @@
   text-align: left;
   width: 100%;
   display: block;
-  touch-action: pan-y;
+  touch-action: manipulation; /* allow swiping between stages; drag blocks scrolling only once lifted */
   transition: transform var(--dur) var(--ease-spring), box-shadow var(--dur) var(--ease-out), opacity var(--dur);
 }
 .kcard.lifting {

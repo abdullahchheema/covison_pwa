@@ -15,6 +15,7 @@ import { BackupReminder } from "./Settings";
 import { BalanceCard, FlowCard, OwedCard } from "./Accounts";
 import { ProjectRowItem } from "./Projects";
 import { loadProjects } from "../db/projects";
+import { wonDealMoney } from "../db/accounts";
 
 async function loadDashboard() {
   const pipelineId = await defaultPipelineId();
@@ -29,7 +30,12 @@ async function loadDashboard() {
   ]);
   const closed = new Set(stages.filter((s) => s.isWon || s.isLost).map((s) => s.id));
   const open = deals.filter((d) => !closed.has(d.stageId));
-  const pipelineValue = open.reduce((s, d) => s + (d.value || 0), 0);
+  const openDealsValue = open.reduce((s, d) => s + (d.value || 0), 0);
+  // Money agreed on won projects but not received yet is still "in the pipeline".
+  const [wonMoney, projects] = await Promise.all([wonDealMoney(), loadProjects()]);
+  const projectsDue =
+    wonMoney.reduce((s, x) => s + x.due, 0) + projects.filter((r) => !r.project.dealId).reduce((s, r) => s + r.money.due, 0);
+  const pipelineValue = openDealsValue + projectsDue;
 
   // Dominant currency for display (deals in mixed currencies are summed as-is, like the web app).
   const cur = new Map<string, number>();
@@ -46,7 +52,7 @@ async function loadDashboard() {
     const t = new Date(d.createdAt).getTime();
     if (t >= start) buckets[Math.min(DAYS - 1, Math.floor((t - start) / 86400000))] += d.value || 0;
   }
-  let run = pipelineValue - buckets.reduce((a, b) => a + b, 0);
+  let run = pipelineValue - buckets.reduce((a, b) => a + b, 0); // project dues sit in the baseline
   const spark = buckets.map((b) => (run += b));
 
   const now = Date.now();
@@ -72,6 +78,7 @@ async function loadDashboard() {
     name,
     currency,
     pipelineValue,
+    projectsDue,
     openCount: open.length,
     spark,
     contactsCount,
@@ -142,7 +149,8 @@ export function Dashboard() {
               </div>
               <div class="h-value t-metric">{money(value, d.currency)}</div>
               <div class="h-sub">
-                {d.openCount} open deal{d.openCount === 1 ? "" : "s"} · last 14 days
+                {d.openCount} open deal{d.openCount === 1 ? "" : "s"}
+                {d.projectsDue > 0 ? ` + ${money(d.projectsDue)} still due on projects` : " · last 14 days"}
               </div>
               <Sparkline data={d.spark} />
             </button>

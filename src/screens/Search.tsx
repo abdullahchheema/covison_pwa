@@ -41,7 +41,7 @@ export function SearchScreen() {
       { label: "Companies", hits: companies.map((c) => ({ id: c.id, kind: "company", title: c.name, sub: c.industry, to: `/companies/${c.id}`, square: true })) },
       { label: "Deals", hits: deals.map((d) => ({ id: d.id, kind: "deal", title: d.name, sub: money(d.value, d.currency), to: `/deals/${d.id}`, icon: "dollar", square: true })) },
       { label: "Tasks", hits: tasks.map((t) => ({ id: t.id, kind: "task", title: t.title, sub: t.status === "done" ? "Completed" : "Open", to: `/tasks/${t.id}`, icon: "tasks", square: true })) },
-      { label: "Projects", hits: projects.map((p) => ({ id: p.id, kind: "project", title: p.name, to: `/projects/${p.id}`, icon: "folder", square: true })) },
+      { label: "Projects", hits: projects.map((p) => ({ id: p.id, kind: "project", title: p.name, to: `/projects/${p.id}`, icon: "briefcase", square: true })) },
     ];
     return groups.filter((g) => g.hits.length);
   }, [query]);

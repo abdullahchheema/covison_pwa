@@ -305,6 +305,9 @@ test("money: Home balances and owed split, WhatsApp, loan repayment into an acco
   await expect(page.locator(".money-card.in .mc-value")).toHaveText(/Rs\s?470,000/, { timeout: 4000 });
   await expect(page.locator(".money-card.personal .mc-value")).toHaveText(/Rs\s?50,000/, { timeout: 4000 });
   await expect(page.locator(".iowe-row")).toContainText(/98,000/);
+  // Open pipeline = open deals 2,445,000 + won project “Lumen pilot” 320,000 not yet received
+  await expect(page.locator(".hero:not(.balance-hero) .h-value")).toHaveText(/Rs\s?2,765,000/, { timeout: 4000 });
+  await expect(page.locator(".hero:not(.balance-hero) .h-sub")).toContainText("still due on projects");
 
   // Money in / out this month per side (sample entries are dated within the last 5 days).
   if (new Date().getDate() >= 6) {
@@ -387,7 +390,7 @@ test("iPhone contacts: bulk .vcf import skips people you already have", async ({
   const form = page.getByRole("dialog").last();
   await expect(form.getByRole("button", { name: "From iPhone contacts" })).toHaveCount(0); // picker button removed
   await form.getByLabel("Name", { exact: true }).fill("Hamza Iqbal");
-  await form.getByLabel("Phone").fill("0301 2223334");
+  await form.getByLabel("Mobile").fill("0301 2223334");
   await form.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Hamza Iqbal" })).toBeVisible();
 
@@ -606,7 +609,7 @@ test("projects: won lead appears as Not started; status, money received and expe
   await expect(page.getByText("Project created")).toBeVisible();
 
   await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Projects" }).click();
-  await expect(page.locator(".section", { hasText: "Not started" })).toContainText("Bilal Store app");
+  await expect(page.locator('[data-stage="not_started"]')).toContainText("Bilal Store app");
   await page.locator(".screen.current").getByText("Bilal Store app").first().click();
   await page.getByRole("button", { name: "In progress", exact: true }).click();
 
@@ -701,4 +704,75 @@ test("amounts keep their decimals (paisa)", async ({ page }) => {
   // 1,000.75 − 250.50 = 750.25
   await page.getByRole("button", { name: "Accounts", exact: true }).click();
   await expect(page.locator(".screen.current .balance-hero .h-value")).toHaveText(/Rs\s?750\.25/, { timeout: 4000 });
+});
+
+/** Long-press a board card with real touch events, then drag it onto a dock zone. */
+async function touchDrag(page: Page, cardText: string, zoneId: string) {
+  const card = page.locator(".screen.current .kcard", { hasText: cardText }).first();
+  await card.scrollIntoViewIfNeeded();
+  const box = (await card.boundingBox())!;
+  const x = box.x + box.width / 2;
+  const y = box.y + 20;
+  await card.evaluate((el, [cx, cy]) => {
+    const t = new Touch({ identifier: 7, target: el, clientX: cx, clientY: cy });
+    el.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, cancelable: true, touches: [t], changedTouches: [t] }));
+  }, [x, y]);
+  await page.waitForTimeout(500); // hold → the card lifts and the dock appears
+  const zone = page.locator(`.drop-dock [data-zone="${zoneId}"]`);
+  await expect(zone).toBeVisible();
+  const z = (await zone.boundingBox())!;
+  await card.evaluate(async (el, [x0, y0, x1, y1]) => {
+    const steps = 10;
+    let last: Touch | undefined;
+    for (let i = 1; i <= steps; i++) {
+      const t = new Touch({ identifier: 7, target: el, clientX: x0 + ((x1 - x0) * i) / steps, clientY: y0 + ((y1 - y0) * i) / steps });
+      last = t;
+      el.dispatchEvent(new TouchEvent("touchmove", { bubbles: true, cancelable: true, touches: [t], changedTouches: [t] }));
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    el.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true, touches: [], changedTouches: [last!] }));
+  }, [x, y, z.x + z.width / 2, z.y + z.height / 2]);
+}
+
+test("touch drag: lead moves between pipeline stages; project moves between project stages", async ({ page }) => {
+  await page.goto("./#/pipeline");
+  await page.getByRole("button", { name: "New lead" }).click();
+  const lead = page.getByRole("dialog").last();
+  await lead.getByLabel("Name", { exact: true }).fill("Drag Me Ltd");
+  await lead.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText(/Lead added to/)).toBeVisible();
+  let db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  const nego = db.stages.find((s) => s.name === "Negotiation")!;
+  await touchDrag(page, "Drag Me Ltd", String(nego.id));
+  await expect(page.getByText("Moved to Negotiation")).toBeVisible();
+  db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  expect(db.deals.find((d) => d.name === "Drag Me Ltd")!.stageId).toBe(nego.id);
+
+  // A project card on the Projects board
+  await page.goto("./#/projects");
+  await page.getByRole("button", { name: "New project" }).first().click();
+  const np = page.getByRole("dialog").last();
+  await np.getByLabel("Name", { exact: true }).fill("Drag project");
+  await np.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Drag project" })).toBeVisible(); // the new project opens
+  await page.goto("./#/projects");
+  await page.locator(".screen.current .stage-strip .chip", { hasText: "Not started" }).click();
+  await page.waitForTimeout(500);
+  await touchDrag(page, "Drag project", "completed");
+  await expect(page.getByText("Drag project: Completed")).toBeVisible();
+  db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
+  expect(db.projects.find((p) => p.name === "Drag project")!.status).toBe("completed");
+  // No to-dos on the project page anymore
+  await page.goto(`./#/projects/${db.projects.find((p) => p.name === "Drag project")!.id}`);
+  await expect(page.getByText("To-dos")).toHaveCount(0);
+});
+
+test("contact form is short by default; More details reveals the rest", async ({ page }) => {
+  await page.goto("./#/contacts");
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByRole("dialog").last().getByRole("button", { name: "New contact", exact: true }).click();
+  const f = page.getByRole("dialog").last();
+  await expect(f.locator(".field label")).toHaveText(["Name", "Mobile", "Company", "Position"]);
+  await f.getByRole("button", { name: /More details/ }).click();
+  await expect(f.getByLabel("Email")).toBeVisible();
 });
