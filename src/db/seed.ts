@@ -229,4 +229,20 @@ export async function loadSampleData(): Promise<void> {
     tx({ type: "expense", scope: "personal", amount: 4500, category: "Fuel" }, 0),
     tx({ type: "expense", scope: "personal", amount: 1800, category: "Food", note: "Dinner" }, 0),
   ].filter((x) => x.date.slice(0, 7) === ymd(0).slice(0, 7) || x.ledgerPaymentId));
+
+  // Accounts, opened a month ago so this month's sample entries move their balances.
+  if ((await db.accounts.count()) === 0) {
+    const opened = ymd(-30);
+    const mk = (name: string, kind: "bank" | "wallet" | "cash", scope: "business" | "personal", openingBalance: number, position: number) => ({
+      id: uid(), name, kind, scope, openingBalance, openingDate: opened, position, createdAt: iso(-30), updatedAt: t,
+    });
+    const meezan = mk("Meezan Bank", "bank", "business", 250000, 0);
+    const nayapay = mk("NayaPay", "wallet", "personal", 42000, 1);
+    const cash = mk("Cash", "cash", "personal", 15000, 2);
+    await db.accounts.bulkAdd([meezan, nayapay, cash]);
+    await db.transactions.toCollection().modify((x) => {
+      if (!x.accountId) x.accountId = x.scope === "business" ? meezan.id : x.category === "Fuel" || x.category === "Food" ? cash.id : nayapay.id;
+    });
+    await db.transfers.add({ id: uid(), fromAccountId: meezan.id, toAccountId: nayapay.id, amount: 20000, date: ymd(-2), note: "Monthly draw", createdAt: t });
+  }
 }

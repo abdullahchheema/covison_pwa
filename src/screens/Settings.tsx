@@ -34,6 +34,8 @@ const TABLE_LABELS: Record<string, string> = {
   ledger: "money entries",
   payments: "payments",
   transactions: "income & expenses",
+  accounts: "accounts",
+  transfers: "transfers",
 };
 
 function useBackupStatus() {

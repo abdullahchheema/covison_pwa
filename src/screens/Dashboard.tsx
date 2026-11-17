@@ -12,8 +12,7 @@ import { Screen } from "../ui/kit";
 import { BarList, Sparkline } from "../ui/charts";
 import { TaskRow } from "./shared";
 import { BackupReminder } from "./Settings";
-import { MoneySummary } from "./Ledger";
-import { MonthGlance } from "./CashFlow";
+import { BalanceCard, FlowCard, OwedCard } from "./Accounts";
 
 async function loadDashboard() {
   const pipelineId = await defaultPipelineId();
@@ -129,8 +128,9 @@ export function Dashboard() {
           </div>
         ) : (
           <>
-            <MoneySummary compact />
-            <MonthGlance />
+            <BalanceCard />
+            <OwedCard />
+            <FlowCard />
 
             <button class="hero press-soft rise mt12" style={{ "--i": 3, width: "100%", textAlign: "left", display: "block" } as never} onClick={() => switchTab("/pipeline")}>
               <div class="row between">

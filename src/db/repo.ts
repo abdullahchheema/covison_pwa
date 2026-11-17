@@ -493,11 +493,11 @@ async function syncSettled(entryId: string) {
   if (balance > 0 && e.settledAt) await db.ledger.update(entryId, { settledAt: undefined, updatedAt: now() });
 }
 
-export async function addPayment(entryId: string, amount: number, date: string, note?: string, method?: string): Promise<void> {
+export async function addPayment(entryId: string, amount: number, date: string, note?: string, method?: string, accountId?: string): Promise<void> {
   await db.transaction("rw", [db.ledger, db.payments, db.transactions], async () => {
     const entry = await db.ledger.get(entryId);
     const paymentId = uid();
-    await db.payments.add({ id: paymentId, entryId, amount, date, note, createdAt: now() });
+    await db.payments.add({ id: paymentId, entryId, amount, date, note, accountId, createdAt: now() });
     // Credit (business) payments are real income/expense, so they also land in
     // the cash-flow book. Personal loans are not income or expenses: no transaction.
     if (entry?.kind === "credit") {
@@ -515,6 +515,7 @@ export async function addPayment(entryId: string, amount: number, date: string, 
         contactId: entry.contactId,
         dealId: entry.dealId,
         ledgerPaymentId: paymentId,
+        accountId,
         createdAt: t,
         updatedAt: t,
       });
@@ -584,7 +585,7 @@ export async function saveTransaction(input: TxInput): Promise<string> {
     if (tx?.ledgerPaymentId) {
       const pay = await db.payments.get(tx.ledgerPaymentId);
       if (pay) {
-        await db.payments.update(pay.id, { amount: input.amount, date: input.date });
+        await db.payments.update(pay.id, { amount: input.amount, date: input.date, accountId: input.accountId });
         await syncSettled(pay.entryId);
       }
     }
@@ -613,9 +614,10 @@ export async function deleteTransaction(id: string): Promise<Snapshot> {
  * first; anything beyond its balance is recorded as extra income. Either way
  * exactly one income line per payment ends up in cash flow.
  */
-export async function recordDealPayment(dealId: string, amount: number, date: string, label: string, method?: string): Promise<void> {
+export async function recordDealPayment(dealId: string, amount: number, date: string, label: string, method?: string, accountId?: string): Promise<void> {
   const deal = await db.deals.get(dealId);
   if (!deal) return;
+  if (amount <= 0) return;
   const entries = await db.ledger.where("dealId").equals(dealId).filter((e) => e.direction === "in" && !e.settledAt).toArray();
   let rest = amount;
   for (const e of entries) {
@@ -623,7 +625,7 @@ export async function recordDealPayment(dealId: string, amount: number, date: st
     const { balance } = withBalance(e, await db.payments.where("entryId").equals(e.id).toArray());
     const apply = Math.min(balance, rest);
     if (apply > 0) {
-      await addPayment(e.id, apply, date, label, method);
+      await addPayment(e.id, apply, date, label, method, accountId);
       rest -= apply;
     }
   }
@@ -639,8 +641,22 @@ export async function recordDealPayment(dealId: string, amount: number, date: st
       note: label,
       contactId: deal.contactId,
       dealId,
+      accountId,
     });
   }
+}
+
+/** Change the agreed total of a deal (it can change at any stage). Logged on the timeline. */
+export async function setDealAgreed(dealId: string, agreed: number): Promise<void> {
+  const d = await db.deals.get(dealId);
+  if (!d || d.value === agreed) return;
+  await db.deals.update(dealId, { value: agreed, updatedAt: now() });
+  await logActivity({
+    type: "field_change",
+    dealId,
+    body: "Agreed total changed",
+    metadata: { field: "agreed total", from: d.value || null, to: agreed || null },
+  });
 }
 
 /** Money received on a deal so far, from the cash-flow book. */

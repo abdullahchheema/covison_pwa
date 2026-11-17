@@ -145,6 +145,10 @@ export interface LeadType {
 export interface Project {
   id: string;
   name: string;
+  /** Set when the project was created from a won deal. */
+  dealId?: string;
+  contactId?: string;
+  description?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -189,6 +193,8 @@ export interface LedgerEntry {
   date: string; // YYYY-MM-DD
   dueDate?: string; // YYYY-MM-DD
   note?: string;
+  /** Loans only: the account the money left (lent) or arrived in (borrowed). */
+  accountId?: string;
   settledAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -198,6 +204,8 @@ export interface LedgerEntry {
 export interface Payment {
   id: string;
   entryId: string;
+  /** Account the repayment went into / came out of. */
+  accountId?: string;
   amount: number;
   date: string; // YYYY-MM-DD
   note?: string;
@@ -225,8 +233,36 @@ export interface Transaction {
   contactId?: string;
   dealId?: string;
   ledgerPaymentId?: string;
+  /** Which account the money went into / came out of. */
+  accountId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A place money sits: a bank, a wallet (NayaPay, JazzCash, Easypaisa) or cash. */
+export interface Account {
+  id: string;
+  name: string;
+  kind: "bank" | "wallet" | "cash";
+  scope: "business" | "personal";
+  /** Balance when the account was added to the app. */
+  openingBalance: number;
+  openingDate: string; // YYYY-MM-DD
+  position: number;
+  archived?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Money moved between two of your own accounts. Not income, not expense. */
+export interface Transfer {
+  id: string;
+  fromAccountId: string;
+  toAccountId: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  note?: string;
+  createdAt: string;
 }
 
 export interface Meta {
@@ -251,6 +287,8 @@ export class CovisonDB extends Dexie {
   ledger!: Table<LedgerEntry, string>;
   payments!: Table<Payment, string>;
   transactions!: Table<Transaction, string>;
+  accounts!: Table<Account, string>;
+  transfers!: Table<Transfer, string>;
   meta!: Table<Meta, string>;
 
   constructor(name = "covison-pocket") {
@@ -280,6 +318,15 @@ export class CovisonDB extends Dexie {
     this.version(3).stores({
       transactions: "id, date, type, scope, category, dealId, contactId, ledgerPaymentId",
     });
+    // v4: accounts (banks, wallets, cash) and transfers; money rows remember their account.
+    this.version(4).stores({
+      transactions: "id, date, type, scope, category, dealId, contactId, ledgerPaymentId, accountId",
+      ledger: "id, direction, contactId, dealId, settledAt, date, accountId",
+      payments: "id, entryId, date, accountId",
+      projects: "id, updatedAt, dealId, contactId",
+      accounts: "id, position, scope",
+      transfers: "id, date, fromAccountId, toAccountId",
+    });
   }
 }
 
@@ -287,6 +334,7 @@ export const db = new CovisonDB();
 
 /** Every data table, in restore order (parents before children). `meta` excluded. */
 export const DATA_TABLES = [
+  "accounts",
   "pipelines",
   "stages",
   "companies",
@@ -303,9 +351,10 @@ export const DATA_TABLES = [
   "ledger",
   "payments",
   "transactions",
+  "transfers",
 ] as const;
 export type DataTableName = (typeof DATA_TABLES)[number];
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const DEFAULT_CURRENCY = "PKR";

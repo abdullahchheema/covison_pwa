@@ -72,6 +72,8 @@ const N = (n: string, req = false): FieldSpec => [n, "number", req];
 const B = (n: string, req = false): FieldSpec => [n, "boolean", req];
 
 const SPEC: Record<DataTableName, FieldSpec[]> = {
+  accounts: [S("id", true), S("name", true), S("kind", true), S("scope", true), N("openingBalance", true), S("openingDate", true), N("position", true)],
+  transfers: [S("id", true), S("fromAccountId", true), S("toAccountId", true), N("amount", true), S("date", true)],
   pipelines: [S("id", true), S("name", true), N("isDefault", true)],
   stages: [S("id", true), S("pipelineId", true), S("name", true), N("position", true), B("isWon", true), B("isLost", true)],
   companies: [S("id", true), S("name", true), S("domain"), S("website"), S("phone"), S("industry"), N("size"), S("address")],
@@ -206,6 +208,11 @@ export function validateBackup(raw: unknown): ValidationResult {
     ref("transactions", "dealId", "deals", false);
     ref("transactions", "contactId", "contacts", false);
     ref("transactions", "ledgerPaymentId", "payments", false);
+    ref("transactions", "accountId", "accounts", false);
+    ref("ledger", "accountId", "accounts", false);
+    ref("payments", "accountId", "accounts", false);
+    ref("transfers", "fromAccountId", "accounts", true);
+    ref("transfers", "toAccountId", "accounts", true);
     ((data.transactions ?? []) as Record<string, unknown>[]).forEach((r, i) => {
       if (r.type !== "income" && r.type !== "expense") errors.push(`transactions[${i}].type must be "income" or "expense".`);
       if (r.scope !== "business" && r.scope !== "personal") errors.push(`transactions[${i}].scope must be "business" or "personal".`);

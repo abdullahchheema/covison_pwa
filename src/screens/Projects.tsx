@@ -13,7 +13,8 @@ import { TaskSection, Timeline, confirmDelete } from "./shared";
 
 export function ProjectsList() {
   const data = useLive(async () => {
-    const [projects, todos, columns] = await Promise.all([db.projects.orderBy("updatedAt").reverse().toArray(), db.projectTodos.toArray(), db.projectColumns.toArray()]);
+    const [projects, todos, columns, contacts] = await Promise.all([db.projects.orderBy("updatedAt").reverse().toArray(), db.projectTodos.toArray(), db.projectColumns.toArray(), db.contacts.toArray()]);
+    const client = new Map(contacts.map((c) => [c.id, c.name]));
     // "Done" = to-dos in each project's last column.
     const lastCol = new Map<string, string>();
     for (const c of columns.sort((a, b) => a.position - b.position)) lastCol.set(c.projectId, c.id);
@@ -24,7 +25,7 @@ export function ProjectsList() {
       if (lastCol.get(t.projectId) === t.columnId) s.done++;
       stats.set(t.projectId, s);
     }
-    return { projects, stats };
+    return { projects, stats, client };
   }, []);
 
   return (
@@ -55,6 +56,7 @@ export function ProjectsList() {
                     <div class="grow">
                       <p class="t-headline truncate">{p.name}</p>
                       <p class="t-footnote c2">
+                        {p.contactId && data.client.get(p.contactId) ? `${data.client.get(p.contactId)} · ` : ""}
                         {s.done}/{s.total} done · updated {relativeTime(p.updatedAt)}
                       </p>
                     </div>
@@ -78,7 +80,8 @@ export function ProjectBoard({ id }: { id: string }) {
     const p = await db.projects.get(id);
     if (!p) return null;
     const [columns, todos] = await Promise.all([db.projectColumns.where("projectId").equals(id).sortBy("position"), db.projectTodos.where("projectId").equals(id).sortBy("position")]);
-    return { p, columns, todos };
+    const client = p.contactId ? await db.contacts.get(p.contactId) : undefined;
+    return { p, columns, todos, client };
   }, [id]);
   const pager = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState(0);
@@ -100,7 +103,7 @@ export function ProjectBoard({ id }: { id: string }) {
         <Empty icon="folder" title="Project not found" />
       </Screen>
     );
-  const { p, columns, todos } = data;
+  const { p, columns, todos, client } = data;
   const zones = columns.map((c) => ({ id: c.id, label: c.name, sub: String(todos.filter((t) => t.columnId === c.id).length) }));
   const move = async (i: number, dir: -1 | 1) => {
     const ids = columns.map((c) => c.id);
@@ -113,6 +116,18 @@ export function ProjectBoard({ id }: { id: string }) {
   return (
     <Screen
       title={p.name}
+      subtitle={
+        (client || p.dealId) && (
+          <span class="row gap8 wrap">
+            {client && <span>{client.name}</span>}
+            {p.dealId && (
+              <button class="c-brand" onClick={() => navigate(`/deals/${p.dealId}`)}>
+                Money &amp; deal →
+              </button>
+            )}
+          </span>
+        )
+      }
       backLabel="Projects"
       backTo="/projects"
       right={

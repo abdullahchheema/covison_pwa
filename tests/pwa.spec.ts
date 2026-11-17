@@ -24,6 +24,8 @@ const STORES = [
   "ledger",
   "payments",
   "transactions",
+  "accounts",
+  "transfers",
 ];
 
 /** Read every data store straight from IndexedDB (independent of app code). */
@@ -151,13 +153,15 @@ test("export → erase → import round-trips with zero data loss, and stays XSS
     const stages = await all<{ id: string; pipelineId: string }>("stages");
     const evil = `<img src=x onerror="window.__xss=1"><script>window.__xss=2</script>`;
     const t = new Date().toISOString();
-    const tx = db.transaction(["contacts", "companies", "deals", "tasks", "activities", "tags", "contactTags", "ledger", "payments", "transactions"], "readwrite");
+    const tx = db.transaction(["contacts", "companies", "deals", "tasks", "activities", "tags", "contactTags", "ledger", "payments", "transactions", "accounts", "transfers"], "readwrite");
+    for (let i = 0; i < 4; i++) tx.objectStore("accounts").put({ id: `acc-${i}`, name: `Bank ${i} 🏦 ${evil}`, kind: ["bank", "wallet", "cash", "bank"][i], scope: i % 2 ? "personal" : "business", openingBalance: 1000 * i, openingDate: "2026-10-01", position: 10 + i, createdAt: t, updatedAt: t });
+    for (let i = 0; i < 6; i++) tx.objectStore("transfers").put({ id: `tr-${i}`, fromAccountId: `acc-${i % 4}`, toAccountId: `acc-${(i + 1) % 4}`, amount: 111 * (i + 1), date: "2026-11-02", note: i ? `move ${i}` : undefined, createdAt: t });
     for (let i = 0; i < 15; i++) {
       tx.objectStore("ledger").put({ id: `l-${i}`, direction: i % 2 ? "out" : "in", kind: i % 3 ? "loan" : "credit", personName: `Person ${i} ${evil}`, phone: "0300 1112233", contactId: i < 5 ? `c-${i}` : undefined, amount: 1000 * (i + 1), currency: "PKR", date: "2026-10-01", dueDate: i % 4 ? "2026-12-01" : undefined, note: `Loan 💸 ${i}`, createdAt: t, updatedAt: t });
       tx.objectStore("payments").put({ id: `p-${i}`, entryId: `l-${i}`, amount: 100 * i, date: "2026-10-15", createdAt: t });
     }
     for (let i = 0; i < 25; i++)
-      tx.objectStore("transactions").put({ id: `tx-${i}`, type: i % 3 ? "expense" : "income", scope: i % 2 ? "personal" : "business", amount: 250 * (i + 1), currency: "PKR", date: `2026-11-${String((i % 28) + 1).padStart(2, "0")}`, category: i % 2 ? "Food 🍛" : "Client payment", method: "Cash", note: `note ${evil}`, contactId: i < 5 ? `c-${i}` : undefined, dealId: i < 3 ? `d-${i}` : undefined, createdAt: t, updatedAt: t });
+      tx.objectStore("transactions").put({ id: `tx-${i}`, type: i % 3 ? "expense" : "income", scope: i % 2 ? "personal" : "business", amount: 250 * (i + 1), currency: "PKR", date: `2026-11-${String((i % 28) + 1).padStart(2, "0")}`, category: i % 2 ? "Food 🍛" : "Client payment", method: "Cash", accountId: `acc-${i % 4}`, note: `note ${evil}`, contactId: i < 5 ? `c-${i}` : undefined, dealId: i < 3 ? `d-${i}` : undefined, createdAt: t, updatedAt: t });
     for (let i = 0; i < 60; i++) {
       const cid = `c-${i}`;
       tx.objectStore("companies").put({ id: `co-${i}`, name: `Firma ${i} 🚀 ${i % 7 === 0 ? evil : ""}`, website: i % 5 === 0 ? "javascript:alert(1)" : `https://f${i}.example`, createdAt: t, updatedAt: t });
@@ -279,54 +283,64 @@ test("launch splash fades into the app (no blank screen)", async ({ page }) => {
   await page.goto("./");
   // The splash is static HTML, visible before the bundle runs.
   await expect(page.locator("#boot .boot-logo")).toHaveCount(1);
-  await expect(page.getByText("People owe you")).toBeVisible();
+  await expect(page.getByText("Owed to you")).toBeVisible();
   await expect(page.locator("#boot")).toHaveCount(0, { timeout: 4000 });
 });
 
-test("money: Home totals, WhatsApp links, and won-on-credit receivable", async ({ page }) => {
+test("money: Home balances and owed split, WhatsApp, loan repayment into an account", async ({ page }) => {
   await page.goto("./#/settings");
   await page.getByText("Erase all data", { exact: true }).click();
   await page.getByRole("dialog").last().getByRole("button", { name: "Erase everything", exact: true }).click();
   await addSampleData(page);
   await page.goto("./#/");
-  // Sample: owed to me 250,000-100,000 + 50,000 = 200,000; I owe 38,000 + (100,000-40,000) = 98,000
-  await expect(page.locator(".money-card.in .mc-value")).toHaveText(/Rs\s?200,000/, { timeout: 4000 });
-  await expect(page.locator(".money-card.out .mc-value")).toHaveText(/Rs\s?98,000/, { timeout: 4000 });
+  // Sample accounts: Meezan 250,000 (business), NayaPay 42,000, Cash 15,000 (personal), opened 30 days ago.
+  // This month: +100,000 +45,000 −12,000 −3,500 (Meezan); −8,200 (NayaPay); −4,500 −1,800 (Cash); transfer 20,000 Meezan→NayaPay
+  // Meezan = 250,000+145,000−15,500−20,000 = 359,500 · NayaPay = 42,000−8,200+20,000 = 53,800 · Cash = 15,000−6,300 = 8,700
+  await expect(page.locator(".balance-hero .h-value")).toHaveText(/Rs\s?422,000/, { timeout: 4000 });
+  await expect(page.locator(".balance-split")).toContainText(/Business\s*Rs\s?359,500/);
+  await expect(page.locator(".balance-split")).toContainText(/Personal\s*Rs\s?62,500/);
+  // Owed: business = Amara credit 150,000 + won project “Lumen pilot” 320,000 not yet paid; personal = Bilal 50,000; I owe 98,000
+  await expect(page.locator(".money-card.in .mc-value")).toHaveText(/Rs\s?470,000/, { timeout: 4000 });
+  await expect(page.locator(".money-card.personal .mc-value")).toHaveText(/Rs\s?50,000/, { timeout: 4000 });
+  await expect(page.locator(".iowe-row")).toContainText(/98,000/);
+
+  // Money in / out this month per side (sample entries are dated within the last 5 days).
+  if (new Date().getDate() >= 6) {
+    const biz = page.locator(".flow-side.business");
+    const per = page.locator(".flow-side.personal");
+    // Business: in 100,000 + 45,000; out 12,000 + 3,500 + transfer 20,000 to personal NayaPay
+    await expect(biz.locator(".flow-line.in")).toHaveText(/145,000/, { timeout: 4000 });
+    await expect(biz.locator(".flow-line.out")).toHaveText(/35,500/);
+    // Personal: in = the 20,000 transfer; out 8,200 + 4,500 + 1,800
+    await expect(per.locator(".flow-line.in")).toHaveText(/20,000/);
+    await expect(per.locator(".flow-line.out")).toHaveText(/14,500/);
+    // All accounts: the cross-side transfer cancels out
+    await expect(page.locator(".flow-total")).toContainText(/in Rs\s?145,000 · out Rs\s?30,000/);
+  }
+
+  // Tapping Personal opens the detailed list
+  await page.locator(".money-card.personal").click();
+  await expect(page.getByText("Bilal (cousin)")).toBeVisible();
 
   // WhatsApp opens the chat directly with the number in international format
   await page.goto("./#/contacts");
   await page.getByText("Amara Okafor", { exact: true }).click();
   await expect(page.locator("a.qa.wa")).toHaveAttribute("href", "whatsapp://send?phone=923001234510");
 
-  // Record a payment on a loan
+  // Loan repayment goes into an account and raises its balance
   await page.goto("./#/money");
   await page.getByRole("button", { name: "Owed", exact: true }).click();
+  await page.locator(".money-card.personal").click();
   await page.getByText("Bilal (cousin)").click();
   await page.getByRole("button", { name: "Payment received" }).click();
   const sheet = page.getByRole("dialog").last();
   await sheet.getByLabel("Amount (Rs)").fill("20000");
+  await sheet.getByLabel("Into account").selectOption({ label: "Cash · Personal" });
   await sheet.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Payment recorded")).toBeVisible();
   await expect(page.locator(".hero .h-value")).toHaveText(/30,000/);
-
-  // New lead who pays on credit -> win the deal -> offered as a receivable
-  await page.goto("./#/pipeline");
-  await page.getByRole("button", { name: "New lead" }).click();
-  const lead = page.getByRole("dialog").last();
-  await lead.getByLabel("Name", { exact: true }).fill("Credit Kamran");
-  await lead.getByLabel("Phone").fill("0312 5550001");
-  await lead.getByLabel("Pays").selectOption("credit");
-  await lead.getByLabel("Value (Rs)").fill("75000");
-  await lead.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText(/Lead added to/)).toBeVisible();
-  await page.getByText("Credit Kamran").first().click();
-  await page.getByRole("button", { name: "Won" }).click();
-  await page.getByRole("dialog").last().getByRole("button", { name: "Add to receivables", exact: true }).click();
-  await expect(page.getByText("Added to People owe you")).toBeVisible();
-  const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
-  const entry = db.ledger.find((e) => e.personName === "Credit Kamran")!;
-  expect(entry).toMatchObject({ direction: "in", kind: "credit", amount: 75000, currency: "PKR", phone: "0312 5550001" });
-  expect(entry.dealId).toBeTruthy();
+  await page.goto("./#/");
+  await expect(page.locator(".balance-split")).toContainText(/Personal\s*Rs\s?82,500/, { timeout: 4000 });
 });
 
 test("contact form: typing a new company adds it to Companies, an existing one is reused", async ({ page }) => {
@@ -393,41 +407,77 @@ test("iPhone contacts: .vcf pick fills the form, bulk import skips existing peop
   expect(db.contacts.find((c) => c.name === "Ayesha Khan")).toMatchObject({ phone: "+923001112233" });
 });
 
-test("deal payments: 35,000 deal, 15,000 advance + 27,000 at delivery = 42,000 received", async ({ page }) => {
+async function addAccount(page: Page, name: string, kind: "Bank" | "Wallet" | "Cash", scope: "Business" | "Personal", balance: string) {
+  await page.goto("./#/money");
+  await page.getByRole("button", { name: "Add money entry" }).click();
+  await page.getByRole("dialog").last().getByRole("button", { name: "Add account", exact: true }).click();
+  const s = page.getByRole("dialog").last();
+  await s.getByLabel("Name", { exact: true }).fill(name);
+  await s.getByRole("button", { name: kind, exact: true }).click();
+  await s.getByRole("button", { name: scope, exact: true }).click();
+  await s.getByLabel("Balance now (Rs)").fill(balance);
+  await s.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText(`${name} added`)).toBeVisible();
+}
+
+test("won flow: popup creates project, agreed total optional, advance into an account; more payments later", async ({ page }) => {
+  await addAccount(page, "Meezan Bank", "Bank", "Business", "100000");
+  await addAccount(page, "NayaPay", "Wallet", "Personal", "5000");
+
+  // Lead with no amount
   await page.goto("./#/pipeline");
   await page.getByRole("button", { name: "New lead" }).click();
   const lead = page.getByRole("dialog").last();
   await lead.getByLabel("Name", { exact: true }).fill("Faisal Ahmed");
   await lead.getByLabel("Phone").fill("0333 4445556");
-  await lead.getByLabel("Value (Rs)").fill("35000");
   await lead.getByRole("button", { name: "Save", exact: true }).click();
   await page.getByText("Faisal Ahmed").first().click();
+  await expect(page.getByText("No amount yet")).toBeVisible();
 
-  const pay = async (amount: string, label: string) => {
-    await page.getByRole("button", { name: /Record (advance|payment|extra payment)/ }).click();
-    const s = page.getByRole("dialog").last();
-    await s.getByRole("button", { name: label, exact: true }).click();
-    await s.getByLabel("Amount (Rs)").fill(amount);
-    await s.getByRole("button", { name: "Save", exact: true }).click();
-    await page.waitForTimeout(500);
-  };
-  await pay("15000", "Advance");
-  await expect(page.getByText(/20,000 still to collect/)).toBeVisible();
-  await pay("27000", "Delivery");
-  await expect(page.getByText(/7,000 extra over the deal value/)).toBeVisible();
-  await expect(page.locator(".card .c-success.t-metric").first()).toHaveText(/42,000/);
+  // Won → popup
+  await page.getByRole("button", { name: "Won" }).click();
+  const won = page.getByRole("dialog").last();
+  await expect(won.getByText("is won")).toBeVisible();
+  await won.getByLabel("Name", { exact: true }).fill("Faisal store website");
+  await won.getByLabel("Description").fill("5-page site with checkout");
+  await won.getByLabel("Advance received").fill("15000");
+  await won.getByLabel("Into account").selectOption({ label: "Meezan Bank · Business" });
+  await won.getByRole("button", { name: "Save", exact: true }).click(); // total left empty: not agreed yet
+  await expect(page.getByText(/Project created · advance/)).toBeVisible();
+  await expect(page.getByText("Total not agreed yet")).toBeVisible();
+
+  // Later: delivery payment + set the agreed total at the same time
+  await page.getByRole("button", { name: /Record (advance|payment|extra payment)/ }).click();
+  const pay = page.getByRole("dialog").last();
+  await pay.getByRole("button", { name: "Delivery", exact: true }).click();
+  await pay.getByLabel("Amount (Rs)").fill("27000");
+  await pay.getByLabel("Into account").selectOption({ label: "NayaPay · Personal" });
+  await pay.getByLabel("Agreed (Rs)").fill("35000");
+  await pay.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText(/7,000 extra over the agreed total/)).toBeVisible();
 
   const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
-  const deal = db.deals.find((d) => d.name === "Faisal Ahmed")!;
-  const incomes = db.transactions.filter((t) => t.dealId === deal.id);
-  expect(incomes.map((t) => [t.amount, t.note, t.type, t.scope]).sort()).toEqual([[15000, "Advance", "income", "business"], [27000, "Delivery", "income", "business"]]);
+  const deal = db.deals.find((d) => d.name === "Faisal store website")!;
+  expect(deal.value).toBe(35000);
+  expect(db.stages.find((s) => s.id === deal.stageId)!.isWon).toBe(true); // stays in Won
+  const project = db.projects.find((p) => p.dealId === deal.id)!;
+  expect(project).toMatchObject({ name: "Faisal store website", description: "5-page site with checkout", contactId: deal.contactId });
+  const meezan = db.accounts.find((a) => a.name === "Meezan Bank")!;
+  const nayapay = db.accounts.find((a) => a.name === "NayaPay")!;
+  const incomes = db.transactions.filter((t) => t.dealId === deal.id).map((t) => [t.amount, t.accountId, t.note]);
+  expect(incomes.sort()).toEqual([[15000, meezan.id, "Advance"], [27000, nayapay.id, "Delivery"]]);
 
-  // New project with the same client from the deal page
+  // Balances updated, shown on Home
+  await page.goto("./#/");
+  await expect(page.locator(".balance-split")).toContainText(/Business\s*Rs\s?115,000/, { timeout: 4000 });
+  await expect(page.locator(".balance-split")).toContainText(/Personal\s*Rs\s?32,000/);
+
+  // New project for the same client
+  await page.goto(`./#/deals/${deal.id}`);
   await page.getByRole("button", { name: "Options" }).click();
   await page.getByRole("button", { name: "New deal with Faisal" }).click();
   const nd = page.getByRole("dialog").last();
   await nd.getByLabel("Deal name").fill("Faisal website v2");
-  await nd.getByLabel("Value (Rs)").fill("20000");
   await nd.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText(/Lead added to/)).toBeVisible();
   const db2 = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
@@ -435,31 +485,31 @@ test("deal payments: 35,000 deal, 15,000 advance + 27,000 at delivery = 42,000 r
   expect(db2.deals.filter((d) => d.contactId === deal.contactId).length).toBe(2);
 });
 
-test("credit client: deal payment settles the receivable and is counted once in cash flow", async ({ page }) => {
-  await page.goto("./#/pipeline");
-  await page.getByRole("button", { name: "New lead" }).click();
-  const lead = page.getByRole("dialog").last();
-  await lead.getByLabel("Name", { exact: true }).fill("Credit Rehan");
-  await lead.getByLabel("Pays").selectOption("credit");
-  await lead.getByLabel("Value (Rs)").fill("60000");
-  await lead.getByRole("button", { name: "Save", exact: true }).click();
-  await page.getByText("Credit Rehan").first().click();
-  await page.getByRole("button", { name: "Won" }).click();
-  await page.getByRole("dialog").last().getByRole("button", { name: "Add to receivables", exact: true }).click();
-  await expect(page.getByText("Added to People owe you")).toBeVisible();
-  await page.getByRole("button", { name: /Record (advance|payment)/ }).click();
+test("accounts: transfer between accounts moves balances, not income or spending", async ({ page }) => {
+  await addAccount(page, "Meezan Bank", "Bank", "Business", "100000");
+  await addAccount(page, "Cash", "Cash", "Personal", "2000");
+  await page.goto("./#/money");
+  await page.getByRole("button", { name: "Accounts", exact: true }).click();
+  await page.getByRole("button", { name: "Transfer", exact: true }).first().click();
   const s = page.getByRole("dialog").last();
-  await s.getByLabel("Amount (Rs)").fill("70000"); // 60,000 settles the credit, 10,000 is extra
-  await s.getByRole("button", { name: "Save", exact: true }).click();
-  await page.waitForTimeout(600);
+  await s.getByLabel("From").selectOption({ label: "Meezan Bank · Bank" });
+  await s.getByLabel("To").selectOption({ label: "Cash · Cash" });
+  await s.getByLabel("Amount (Rs)").fill("30000");
+  await s.getByRole("button", { name: "Move", exact: true }).click();
+  await expect(page.getByText(/Moved Rs\s?30,000 from Meezan Bank to Cash/)).toBeVisible();
+  await page.getByText("Meezan Bank", { exact: true }).click();
+  await expect(page.locator(".screen.current .hero .h-value")).toHaveText(/70,000/, { timeout: 4000 });
+  await expect(page.getByText("To Cash", { exact: true })).toBeVisible();
+  await page.goto("./#/");
+  await expect(page.locator(".balance-hero .h-value")).toHaveText(/Rs\s?102,000/, { timeout: 4000 });
+  await expect(page.locator(".balance-split")).toContainText(/Personal\s*Rs\s?32,000/);
+  // Business → personal transfer: out of business, into personal, nothing in/out overall
+  await expect(page.locator(".flow-side.business .flow-line.out")).toHaveText(/30,000/, { timeout: 4000 });
+  await expect(page.locator(".flow-side.personal .flow-line.in")).toHaveText(/30,000/);
+  await expect(page.locator(".flow-total")).toContainText(/in Rs\s?0 · out Rs\s?0/);
   const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
-  const deal = db.deals.find((d) => d.name === "Credit Rehan")!;
-  const entry = db.ledger.find((e) => e.dealId === deal.id)!;
-  expect(entry.settledAt).toBeTruthy();
-  expect(db.payments.filter((p) => p.entryId === entry.id).map((p) => p.amount)).toEqual([60000]);
-  const tx = db.transactions.filter((t) => t.dealId === deal.id);
-  expect(tx.map((t) => t.amount).sort((a, b) => Number(a) - Number(b))).toEqual([10000, 60000]);
-  expect(tx.reduce((sum, t) => sum + Number(t.amount), 0)).toBe(70000);
+  expect(db.transactions.length).toBe(0); // a transfer is not income/expense
+  expect(db.transfers.length).toBe(1);
 });
 
 test("cash flow: add personal expense and business income, month totals update", async ({ page }) => {
@@ -485,7 +535,8 @@ test("cash flow: add personal expense and business income, month totals update",
   expect(db.transactions.length).toBe(3);
   expect(db.transactions.find((t) => t.category === "Groceries")).toMatchObject({ type: "expense", scope: "personal", amount: 2500 });
   expect(db.transactions.find((t) => t.category === "Client payment")).toMatchObject({ type: "income", scope: "business", amount: 50000 });
-  // Home shows the month at a glance
+  // The month view in Money → Cash flow keeps the totals across navigation
   await page.goto("./#/");
-  await expect(page.getByText("+Rs 46,300 net")).toBeVisible();
+  await page.goto("./#/money");
+  await expect(page.getByText("Saved Rs 46,300")).toBeVisible();
 });

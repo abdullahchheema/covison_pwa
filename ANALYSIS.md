@@ -287,3 +287,41 @@ These features are new in the PWA. They didn't exist in the web CRM.
   - A payment you make on a credit purchase is recorded as a business expense.
   - The two stay linked: editing or deleting one updates the other.
 - **Personal loans are not income or spending.** They only appear under Money → Owed.
+
+### Accounts and balances (Money → Accounts)
+- New tables, all of them backed up and validated: `accounts` (bank, wallet or cash; business or personal; opening balance and its date) and `transfers`. Dexie version 4, backup `schemaVersion` 4.
+- Every money row can carry an `accountId`: income and expense entries (including deal payments), loan entries, and loan repayments.
+- **How a balance is worked out:**
+  - Start from the opening balance.
+  - Add income and subtract expenses booked to the account.
+  - Add transfers in and subtract transfers out.
+  - Loans: money lent from it goes out, money borrowed into it comes in.
+  - Repayments of those loans move the other way.
+- **No double counting:** payments on credit entries count once, through the income or expense entry they create.
+- Anything dated before an account was added is treated as already included in its opening balance.
+- **Deleting an account:** an account with history can't be deleted, so it's archived (hidden) to keep past balances right. Unused accounts are deleted.
+
+### Home
+- **Money you have:** the total across all accounts, split into business and personal. Tap it to open the accounts.
+- **Owed to you**, with two cards that each open a detailed list:
+  - **Business:** credit entries, plus won projects where the agreed total is more than what's been received.
+  - **Personal:** personal loans.
+- **You owe:** a separate line.
+
+### Won → project
+- Leads no longer need an amount.
+- The moment a deal reaches Won (drag, Move menu, or the Won button), a popup asks for:
+  - project name and description
+  - **total agreed** (optional; the price can be fixed later)
+  - **advance received**, and which account it went into
+- Saving creates a Project linked to the deal and the client, and marks the contact as won. The deal stays in Won.
+- Money can be recorded on a deal at any stage ("Money received"). Each payment asks which account it went into and shows the agreed total, which you can change at any time; changes are logged on the timeline.
+- This replaces the earlier "add to receivables on win for credit clients" prompt. A won project with money still to collect counts as business money owed to you directly.
+
+### Money in and out (Home, Money → Accounts, each account page)
+- For each month, shows the total that came **into** and went **out of** your **business** accounts and your **personal** accounts separately, plus the net.
+- Counted per account: income, expenses, loans given or taken, loan repayments, and transfers.
+- **Transfers between two accounts on the same side** (business → business, or personal → personal) are internal and aren't counted.
+- **A business → personal transfer** counts as out of business and into personal. In the "All accounts" line it cancels out.
+- Home shows the current month. Money → Accounts has a month switcher. Each account's page shows that account's in and out for the current month.
+- Entries with no account (recorded before accounts existed) are not part of these totals. They still show in Money → Cash flow.

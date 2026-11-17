@@ -7,8 +7,6 @@ import {
   addNote,
   addPayment,
   CATEGORIES,
-  PAYMENT_METHODS,
-  recordDealPayment,
   saveTransaction,
   saveLedgerEntry,
   todayYmd,
@@ -38,11 +36,13 @@ import {
   TASK_PRIORITIES,
 } from "../lib/options";
 import { MAX_LONG, cleanText, isEmail, optText } from "../lib/sanitize";
-import { fromDateTimeInput, money, toDateTimeInput } from "../lib/format";
+import { fromDateTimeInput, toDateTimeInput } from "../lib/format";
 import { Group, Row, Segmented, SelectField, SwitchField, TextArea, TextField } from "../ui/kit";
 import { actionSheet, confirmSheet, openSheet, toast } from "../ui/overlay";
 import { contactPickerSupported, parseVCards, phoneKey, pickPhoneContact, type PhoneContact } from "../lib/phoneContacts";
 import { pickFile } from "./CsvImport";
+import { AccountSelect, useDefaultAccount } from "./moneyForms";
+import { rememberAccount } from "../db/accounts";
 import { Icon } from "../ui/icons";
 import { navigate } from "../lib/router";
 
@@ -836,7 +836,7 @@ function LeadForm({ bind, defaults }: { bind: Binding; defaults: { stageId?: str
       )}
       <Group label="Deal">
         <SelectField label="Stage" value={stageId} placeholder={false} onChange={set("stageId")} options={(stages ?? []).map((s) => ({ value: s.id, label: s.name }))} />
-        <TextField label="Value (Rs)" value={f.value} onInput={set("value")} inputMode="numeric" placeholder="0" />
+        <TextField label="Value (Rs)" value={f.value} onInput={set("value")} inputMode="numeric" placeholder="Optional, set when won" />
         <TextField label="Deal name" value={f.dealName} onInput={set("dealName")} placeholder="Defaults to the name" />
       </Group>
       <Group>
@@ -866,6 +866,7 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
   });
   const set = (k: keyof typeof f) => (v: string) => setF((p) => ({ ...p, [k]: v }));
   const contacts = useLive(() => db.contacts.orderBy("name").toArray(), []);
+  const [accountId, setAccountId] = useDefaultAccount(e.accountId);
 
   bind.current = async () => {
     const amount = numOrUndef(f.amount);
@@ -891,8 +892,10 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
       date: f.date || todayYmd(),
       dueDate: f.dueDate || undefined,
       note: optText(f.note, MAX_LONG),
+      accountId: f.kind === "loan" && accountId ? accountId : undefined,
       settledAt: existing?.settledAt,
     });
+    if (f.kind === "loan") rememberAccount(accountId);
     toast(existing ? "Entry updated" : f.direction === "in" ? "Added to money owed to you" : "Added to money you owe", { icon: "wallet" });
   };
 
@@ -923,6 +926,7 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
         <TextField label="Amount (Rs)" value={f.amount} onInput={set("amount")} inputMode="decimal" placeholder="0" autoFocus={!existing && !defaults.amount} />
         <TextField label="Date" value={f.date} onInput={set("date")} type="date" />
         <TextField label="Due by" value={f.dueDate} onInput={set("dueDate")} type="date" />
+        {f.kind === "loan" && <AccountSelect value={accountId} onChange={setAccountId} label={f.direction === "in" ? "Lent from" : "Received into"} optional />}
       </Group>
       <Group>
         <TextArea label="Note" value={f.note} onInput={set("note")} placeholder="What was it for?" />
@@ -940,12 +944,13 @@ function PaymentForm({ bind, entry, remaining }: { bind: Binding; entry: LedgerE
   const [amount, setAmount] = useState(String(remaining));
   const [date, setDate] = useState(todayYmd());
   const [note, setNote] = useState("");
-  const [method, setMethod] = useState("Cash");
+  const [accountId, setAccountId] = useDefaultAccount();
   bind.current = async () => {
     const a = numOrUndef(amount);
     if (!a || a <= 0) return fail("Enter an amount");
     if (a > remaining + 0.001) return fail(`That's more than the Rs ${remaining.toLocaleString()} left`);
-    await addPayment(entry.id, a, date || todayYmd(), optText(note, 500), method);
+    rememberAccount(accountId);
+    await addPayment(entry.id, a, date || todayYmd(), optText(note, 500), undefined, accountId || undefined);
     toast(a >= remaining ? "Fully settled 🎉" : "Payment recorded", { icon: "checkCircle" });
   };
   return (
@@ -953,7 +958,7 @@ function PaymentForm({ bind, entry, remaining }: { bind: Binding; entry: LedgerE
       <Group footer={`Remaining: Rs ${remaining.toLocaleString()}. Partial payments are fine.`}>
         <TextField label="Amount (Rs)" value={amount} onInput={setAmount} inputMode="decimal" autoFocus />
         <TextField label="Date" value={date} onInput={setDate} type="date" />
-        <SelectField label="Method" value={method} placeholder={false} onChange={setMethod} options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))} />
+        <AccountSelect value={accountId} onChange={setAccountId} label={entry.direction === "in" ? "Into account" : "From account"} optional />
         <TextField label="Note" value={note} onInput={setNote} placeholder="Optional" />
       </Group>
     </div>
@@ -1102,45 +1107,6 @@ async function resolveCompanyQuiet(name: string): Promise<string | undefined> {
   return hit?.id ?? saveCompany({ name: n });
 }
 
-// =================== Deal payment (advance, delivery, extra...) ===================
-const PAYMENT_LABELS = ["Advance", "Delivery", "Instalment", "Extra work", "Final payment"];
-
-export function openDealPaymentForm(deal: Deal, received: number) {
-  openForm("Payment received", (bind) => <DealPaymentForm bind={bind} deal={deal} received={received} />);
-}
-
-function DealPaymentForm({ bind, deal, received }: { bind: Binding; deal: Deal; received: number }) {
-  const left = Math.max(0, deal.value - received);
-  const [amount, setAmount] = useState(left ? String(left) : "");
-  const [label, setLabel] = useState(received === 0 ? "Advance" : left > 0 ? "Delivery" : "Extra work");
-  const [date, setDate] = useState(todayYmd());
-  const [method, setMethod] = useState("Cash");
-  bind.current = async () => {
-    const a = numOrUndef(amount);
-    if (!a || a <= 0) return fail("Enter an amount");
-    await recordDealPayment(deal.id, a, date || todayYmd(), optText(label, 80) ?? "Payment", method || undefined);
-    const total = received + a;
-    toast(total > deal.value ? `Received ${money(total, deal.currency)}, ${money(total - deal.value, deal.currency)} over the deal value` : `Received ${money(total, deal.currency)} of ${money(deal.value, deal.currency)}`, { icon: "wallet" });
-  };
-  return (
-    <div class="form">
-      <div class="row wrap gap8" style="padding:0 4px">
-        {PAYMENT_LABELS.map((l) => (
-          <button key={l} class="chip press" aria-pressed={label === l} onClick={() => setLabel(l)}>
-            {l}
-          </button>
-        ))}
-      </div>
-      <Group footer={`Deal ${money(deal.value, deal.currency)} · received so far ${money(received, deal.currency)}. You can receive more than the deal value (extra work); it all counts as income.`}>
-        <TextField label="Amount (Rs)" value={amount} onInput={setAmount} inputMode="decimal" placeholder="0" autoFocus />
-        <TextField label="For" value={label} onInput={setLabel} placeholder="Advance, delivery…" />
-        <TextField label="Date" value={date} onInput={setDate} type="date" />
-        <SelectField label="Method" value={method} placeholder={false} onChange={setMethod} options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))} />
-      </Group>
-    </div>
-  );
-}
-
 // =================== Income / expense ===================
 export function openTransactionForm(existing?: Transaction, defaults: Partial<Transaction> = {}) {
   openForm(existing ? "Edit entry" : defaults.type === "income" ? "Add income" : "Add expense", (bind) => <TransactionForm bind={bind} existing={existing} defaults={defaults} />);
@@ -1153,7 +1119,8 @@ function TransactionForm({ bind, existing, defaults }: { bind: Binding; existing
   const [amount, setAmount] = useState(t.amount ? String(t.amount) : "");
   const [category, setCategory] = useState(t.category ?? "");
   const [date, setDate] = useState(t.date ?? todayYmd());
-  const [method, setMethod] = useState(t.method ?? "Cash");
+  const [accountId, setAccountId] = useDefaultAccount(t.accountId);
+  const [scopeTouched, setScopeTouched] = useState(!!existing || !!defaults.scope);
   const [note, setNote] = useState(t.note ?? "");
   const [contactId, setContactId] = useState(t.contactId ?? "");
   const contacts = useLive(() => db.contacts.orderBy("name").toArray(), []);
@@ -1166,6 +1133,7 @@ function TransactionForm({ bind, existing, defaults }: { bind: Binding; existing
     const a = numOrUndef(amount);
     if (!a || a <= 0) return fail("Enter an amount");
     const cat = optText(category, 60) ?? "Other";
+    rememberAccount(accountId);
     await saveTransaction({
       id: existing?.id,
       type,
@@ -1174,7 +1142,8 @@ function TransactionForm({ bind, existing, defaults }: { bind: Binding; existing
       currency: t.currency ?? DEFAULT_CURRENCY,
       date: date || todayYmd(),
       category: cat,
-      method: method || undefined,
+      method: t.method,
+      accountId: accountId || undefined,
       note: optText(note, 2000),
       contactId: contactId || undefined,
       dealId: t.dealId,
@@ -1200,6 +1169,7 @@ function TransactionForm({ bind, existing, defaults }: { bind: Binding; existing
         value={scope}
         onChange={(v) => {
           setScope(v);
+          setScopeTouched(true);
           if (!existing) setCategory("");
         }}
         options={[
@@ -1230,7 +1200,15 @@ function TransactionForm({ bind, existing, defaults }: { bind: Binding; existing
         </div>
       </div>
       <Group>
-        <SelectField label="Method" value={method} placeholder={false} onChange={setMethod} options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))} />
+        <AccountSelect
+          value={accountId}
+          onChange={(id, acc) => {
+            setAccountId(id);
+            if (acc && !scopeTouched) setScope(acc.scope);
+          }}
+          label={type === "income" ? "Into account" : "Paid from"}
+          optional
+        />
         <SelectField label="Person" value={contactId} onChange={setContactId} placeholder="None" options={(contacts ?? []).map((x) => ({ value: x.id, label: x.name }))} />
         <TextField label="Note" value={note} onInput={setNote} placeholder="Optional" />
       </Group>

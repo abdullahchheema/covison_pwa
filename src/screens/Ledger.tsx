@@ -14,6 +14,9 @@ import { actionSheet, confirmSheet, toast, undoToast } from "../ui/overlay";
 import { openLedgerForm, openPaymentForm, openTransactionForm } from "./forms";
 import { confirmDelete } from "./shared";
 import { CashFlowView } from "./CashFlow";
+import { AccountsView } from "./Accounts";
+import { openAccountForm, openTransferForm } from "./moneyForms";
+import { owedSummary, wonDealMoney } from "../db/accounts";
 
 type View = "in" | "out" | "settled";
 
@@ -135,12 +138,16 @@ function EntryRow({ x, i }: { x: EntryWithBalance; i: number }) {
   );
 }
 
+type MoneyTab = "accounts" | "flow" | "owed";
+type OwedTab = "business" | "personal" | "iowe" | "settled";
+
 export function MoneyScreen() {
-  const [tab, setTab] = useStoredState<"flow" | "owed">("money.tab", "flow");
+  const [tab, setTab] = useStoredState<MoneyTab>("money.tab", "accounts");
+  const subtitle = { accounts: "Banks, wallets and cash", flow: "Earnings and expenses", owed: "Who owes whom" }[tab] ?? "";
   return (
     <Screen
       title="Money"
-      subtitle={tab === "flow" ? "Earnings and expenses" : "Credit clients and personal loans"}
+      subtitle={subtitle}
       right={
         <button
           class="nav-btn"
@@ -149,7 +156,9 @@ export function MoneyScreen() {
             actionSheet([
               { label: "Add expense", icon: "arrowUpRight", run: () => openTransactionForm(undefined, { type: "expense" }) },
               { label: "Add income", icon: "arrowDownLeft", run: () => openTransactionForm(undefined, { type: "income", scope: "business" }) },
-              { label: "Loan or credit (owed)", icon: "handshake", run: () => openLedgerForm() },
+              { label: "Transfer between accounts", icon: "refresh", run: () => openTransferForm() },
+              { label: "Loan given or taken", icon: "handshake", run: () => openLedgerForm(undefined, { kind: "loan" }) },
+              { label: "Add account", icon: "wallet", run: () => openAccountForm() },
             ])
           }
         >
@@ -158,16 +167,17 @@ export function MoneyScreen() {
       }
     >
       <div class="content">
-        <Segmented<"flow" | "owed">
+        <Segmented<MoneyTab>
           value={tab}
           onChange={setTab}
           options={[
+            { value: "accounts", label: "Accounts" },
             { value: "flow", label: "Cash flow" },
             { value: "owed", label: "Owed" },
           ]}
         />
         <div class="mt16" key={tab}>
-          {tab === "flow" ? <CashFlowView /> : <OwedView />}
+          {tab === "accounts" ? <AccountsView /> : tab === "flow" ? <CashFlowView /> : <OwedView />}
         </div>
       </div>
     </Screen>
@@ -176,80 +186,86 @@ export function MoneyScreen() {
 
 function OwedView() {
   const all = useLive(loadLedger, []);
-  const [view, setView] = useStoredState<View>("ledger.view", "in");
-  const [kind, setKind] = useStoredState<"" | "loan" | "credit">("ledger.kind", "");
+  const summary = useLive(owedSummary, []);
+  const projects = useLive(wonDealMoney, []);
+  const [view, setView] = useStoredState<OwedTab>("owed.tab", "business");
 
-  const list = useMemo(() => {
+  const ledgerRows = useMemo(() => {
     if (!all) return undefined;
     return all.filter((x) => {
-      const settled = !!x.entry.settledAt;
-      if (view === "settled" ? !settled : settled || x.entry.direction !== view) return false;
-      return !kind || x.entry.kind === kind;
+      const settled = !!x.entry.settledAt || x.balance <= 0;
+      if (view === "settled") return settled;
+      if (settled) return false;
+      if (view === "iowe") return x.entry.direction === "out";
+      if (x.entry.direction !== "in") return false;
+      return view === "personal" ? x.entry.kind === "loan" : x.entry.kind === "credit";
     });
-  }, [all, view, kind]);
-  const total = (list ?? []).reduce((s, x) => s + (x.entry.settledAt ? 0 : x.balance), 0);
+  }, [all, view]);
+  const projectRows = view === "business" ? (projects ?? []).filter((p) => p.due > 0 || p.agreed === 0) : [];
+  const total = view === "business" ? summary?.businessTotal : view === "personal" ? summary?.personalTotal : view === "iowe" ? summary?.iOweTotal : undefined;
+  const empty = ledgerRows !== undefined && ledgerRows.length === 0 && projectRows.length === 0;
+  let i = 0;
 
   return (
     <>
-        <MoneySummary />
-        <div class="mt16">
-          <Segmented<View>
-            value={view}
-            onChange={setView}
-            options={[
-              { value: "in", label: "Owed to me" },
-              { value: "out", label: "I owe" },
-              { value: "settled", label: "Settled" },
-            ]}
-          />
+      <div class="money-cards" style="grid-template-columns:repeat(3,1fr)">
+        {([
+          ["business", "Business", summary?.businessTotal, "in"],
+          ["personal", "Personal", summary?.personalTotal, "personal"],
+          ["iowe", "You owe", summary?.iOweTotal, "out"],
+        ] as const).map(([k, label, amt, cls]) => (
+          <button key={k} class={`money-card ${cls} press`} style={{ padding: "12px", opacity: view === k ? 1 : 0.6, transform: view === k ? "scale(1)" : "scale(.97)", transition: "opacity .25s, transform .3s var(--ease-spring)" }} onClick={() => setView(k)}>
+            <span class="mc-top" style="font-size:12px">{label}</span>
+            <span class="mc-value t-metric" style="font-size:17px">{money(amt ?? 0, "PKR", (amt ?? 0) >= 1_000_000)}</span>
+          </button>
+        ))}
+      </div>
+      <div class="chips mt12">
+        <button class="chip press" aria-pressed={view === "settled"} onClick={() => setView(view === "settled" ? "business" : "settled")}>
+          <Icon name="checkCircle" size={15} /> Settled
+        </button>
+        <button class="chip press" onClick={() => openLedgerForm(undefined, { kind: "loan", direction: view === "iowe" ? "out" : "in" })}>
+          <Icon name="plus" size={15} /> Loan
+        </button>
+        <button class="chip press" onClick={() => openLedgerForm(undefined, { kind: "credit", direction: view === "iowe" ? "out" : "in" })}>
+          <Icon name="plus" size={15} /> Credit
+        </button>
+      </div>
+
+      {total !== undefined && !empty && (
+        <div class="row between" style="padding:4px 4px 8px">
+          <span class="t-overline">{view === "business" ? "Clients & credit" : view === "personal" ? "Personal loans" : "You owe"}</span>
+          <span class={`t-subhead num ${view === "iowe" ? "c-danger" : "c-success"}`} style="font-weight:700">{money(total)}</span>
         </div>
-        <div class="chips mt12">
-          <button class="chip press" aria-pressed={!kind} onClick={() => setKind("")}>
-            All
-          </button>
-          <button class="chip press" aria-pressed={kind === "credit"} onClick={() => setKind(kind === "credit" ? "" : "credit")}>
-            Credit
-          </button>
-          <button class="chip press" aria-pressed={kind === "loan"} onClick={() => setKind(kind === "loan" ? "" : "loan")}>
-            Personal loans
-          </button>
+      )}
+
+      {ledgerRows === undefined ? (
+        <SkeletonList rows={4} />
+      ) : empty ? (
+        <Empty
+          icon="wallet"
+          title={{ business: "No client owes you", personal: "No personal loans out", iowe: "You don't owe anyone", settled: "Nothing settled yet" }[view]}
+          text={view === "business" ? "Won projects with money still to collect show up here, with credit sales." : view === "settled" ? "Fully paid entries move here." : "Add a loan with the + Loan button."}
+        />
+      ) : (
+        <div class="group">
+          {projectRows.map((p) => (
+            <Row
+              key={p.deal.id}
+              i={i++}
+              onClick={() => navigate(`/deals/${p.deal.id}`)}
+              lead={<span class="tile orange"><Icon name="folder" size={16} /></span>}
+              title={p.deal.name}
+              sub={p.agreed === 0 ? `Total not agreed · received ${money(p.received)}` : `Received ${money(p.received)} of ${money(p.agreed)}`}
+              trail={<span class={`num t-headline ${p.agreed === 0 ? "c3" : "c-success"}`} style="flex-shrink:0">{p.agreed === 0 ? "—" : money(p.due)}</span>}
+              chevron={false}
+            />
+          ))}
+          {ledgerRows.map((x) => (
+            <EntryRow key={x.entry.id} x={x} i={i++} />
+          ))}
         </div>
-        {!list ? (
-          <SkeletonList rows={4} />
-        ) : list.length === 0 ? (
-          <Empty
-            icon="wallet"
-            title={view === "settled" ? "Nothing settled yet" : view === "in" ? "Nobody owes you" : "You don't owe anyone"}
-            text={
-              view === "settled"
-                ? "Fully paid entries move here."
-                : "Add a personal loan or a credit sale. Deals won with credit clients can add themselves here."
-            }
-            action={
-              view !== "settled" && (
-                <button class="btn primary sm press" onClick={() => openLedgerForm(undefined, { direction: view })}>
-                  Add entry
-                </button>
-              )
-            }
-          />
-        ) : (
-          <>
-            {view !== "settled" && (
-              <div class="row between" style="padding:4px 4px 8px">
-                <span class="t-overline">{list.length} open</span>
-                <span class={`t-subhead num ${view === "in" ? "c-success" : "c-danger"}`} style="font-weight:600">
-                  {money(total)}
-                </span>
-              </div>
-            )}
-            <div class="group">
-              {list.map((x, i) => (
-                <EntryRow key={x.entry.id} x={x} i={i} />
-              ))}
-            </div>
-          </>
-        )}
+      )}
     </>
   );
 }
