@@ -95,7 +95,8 @@ export function ProjectsList() {
     return m;
   }, [rows]);
   const active = (rows ?? []).filter((r) => r.status !== "completed");
-  const totals = active.reduce((t, r) => ({ due: t.due + r.money.due, received: t.received + r.money.received, spent: t.spent + r.money.spent }), { due: 0, received: 0, spent: 0 });
+  // All projects, completed ones too: a finished project can still have money to collect.
+  const totals = (rows ?? []).reduce((t, r) => ({ due: t.due + r.money.due, received: t.received + r.money.received, spent: t.spent + r.money.spent }), { due: 0, received: 0, spent: 0 });
   const zones = STATUS_ORDER.map((s) => ({ id: s, label: STATUS_LABEL[s] }));
 
   return (

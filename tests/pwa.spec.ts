@@ -827,3 +827,16 @@ test("+ button matches the screen; toasts and the backup warning swipe away upwa
   });
   await expect(page.locator(".toast-wrap")).toHaveCount(0, { timeout: 1500 });
 });
+
+test("projects: Still due counts completed projects that aren't fully paid", async ({ page }) => {
+  await page.goto("./#/projects");
+  await page.getByRole("button", { name: "New project" }).first().click();
+  const f = page.getByRole("dialog").last();
+  await f.getByLabel("Name", { exact: true }).fill("Finished but unpaid");
+  await f.getByLabel("Total agreed (Rs)").fill("80000");
+  await f.getByRole("button", { name: "Completed", exact: true }).click();
+  await f.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Finished but unpaid" })).toBeVisible();
+  await page.goto("./#/projects");
+  await expect(page.locator(".screen.current .metric").first()).toContainText("80,000");
+});
