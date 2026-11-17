@@ -840,3 +840,16 @@ test("projects: Still due counts completed projects that aren't fully paid", asy
   await page.goto("./#/projects");
   await expect(page.locator(".screen.current .metric").first()).toContainText("80,000");
 });
+
+test("pipeline card shows the company on top and the person at the bottom", async ({ page }) => {
+  await page.goto("./#/pipeline");
+  await page.getByRole("button", { name: "New lead" }).first().click();
+  const lead = page.getByRole("dialog").last();
+  await lead.getByLabel("Name", { exact: true }).fill("Ayan Malik");
+  await lead.getByLabel("Company", { exact: true }).fill("Eman Furniture");
+  await lead.getByRole("button", { name: "Save", exact: true }).click();
+  const card = page.locator(".screen.current .kcard", { hasText: "Eman Furniture" }).first();
+  await expect(card.locator(".t-headline")).toHaveText("Eman Furniture");
+  await expect(card.locator(".row.gap8.mt8")).toContainText("Ayan Malik");
+  await expect(card.locator(".row.gap8.mt8")).not.toContainText("Eman Furniture");
+});

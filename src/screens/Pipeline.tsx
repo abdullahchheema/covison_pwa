@@ -166,7 +166,20 @@ export function Pipeline() {
                             await moveDealTo(d.id, z);
                           }}>
                             <div class="row between" style="align-items:flex-start">
-                              <span class="t-headline clamp2" style="flex:1">{d.name}</span>
+                              {(() => {
+                                // Company on top (falls back to the deal name); the deal name
+                                // shows underneath only when it says something different.
+                                const company = d.companyId ? board.company.get(d.companyId) : undefined;
+                                const person = d.contactId ? board.contact.get(d.contactId) : undefined;
+                                const title = company ?? d.name;
+                                const extra = d.name !== title && d.name !== person ? d.name : undefined;
+                                return (
+                                  <span class="col" style="flex:1;min-width:0">
+                                    <span class="t-headline clamp2">{title}</span>
+                                    {extra && <span class="t-footnote c2 truncate">{extra}</span>}
+                                  </span>
+                                );
+                              })()}
                               <button
                                 class="c3"
                                 aria-label="Move deal"
@@ -209,12 +222,6 @@ export function Pipeline() {
                                 <span class="row gap4 truncate">
                                   <Icon name="user" size={13} />
                                   {board.contact.get(d.contactId)}
-                                </span>
-                              )}
-                              {d.companyId && board.company.get(d.companyId) && (
-                                <span class="row gap4 truncate">
-                                  <Icon name="building" size={13} />
-                                  {board.company.get(d.companyId)}
                                 </span>
                               )}
                               {d.expectedCloseDate && (
