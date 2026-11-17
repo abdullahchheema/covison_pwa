@@ -253,6 +253,72 @@ export async function monthFlows(year: number, month: number): Promise<MonthFlow
   return res;
 }
 
+// ---------------- personal loans as cash movements ----------------
+
+export interface LoanMove {
+  id: string;
+  date: string;
+  createdAt: string;
+  label: string;
+  sub: string;
+  amount: number; // always positive; see dir
+  dir: "in" | "out";
+  category: string;
+  scope: "business" | "personal";
+  link: string;
+}
+
+/**
+ * Money that actually left or came into your pocket through personal loans
+ * in a month: lending, borrowing and repayments. Client credit isn't here:
+ * its payments already create income/expense entries.
+ */
+export async function monthLoanMoves(year: number, month: number, scope?: "business" | "personal"): Promise<LoanMove[]> {
+  const p = (n: number) => String(n).padStart(2, "0");
+  const from = `${year}-${p(month + 1)}-01`;
+  const to = `${year}-${p(month + 1)}-${p(new Date(year, month + 1, 0).getDate())}`;
+  const [ledger, payments, accounts] = await Promise.all([db.ledger.toArray(), db.payments.toArray(), db.accounts.toArray()]);
+  const acc = new Map(accounts.map((a) => [a.id, a]));
+  const sideOf = (accountId?: string) => (accountId && acc.get(accountId)?.scope) || "personal";
+  const accName = (accountId?: string) => (accountId ? acc.get(accountId)?.name : undefined);
+  const out: LoanMove[] = [];
+  const loans = new Map(ledger.filter((e) => e.kind === "loan").map((e) => [e.id, e]));
+  for (const e of loans.values()) {
+    if (e.date < from || e.date > to) continue;
+    const lent = e.direction === "in";
+    out.push({
+      id: e.id,
+      date: e.date,
+      createdAt: e.createdAt,
+      label: lent ? `Lent to ${e.personName}` : `Borrowed from ${e.personName}`,
+      sub: [e.note, accName(e.accountId), "Personal loan"].filter(Boolean).join(" · "),
+      amount: e.amount,
+      dir: lent ? "out" : "in",
+      category: lent ? "Lent" : "Borrowed",
+      scope: sideOf(e.accountId),
+      link: `/money/${e.id}`,
+    });
+  }
+  for (const pm of payments) {
+    const e = loans.get(pm.entryId);
+    if (!e || pm.date < from || pm.date > to) continue;
+    const theyRepaid = e.direction === "in";
+    out.push({
+      id: pm.id,
+      date: pm.date,
+      createdAt: pm.createdAt,
+      label: theyRepaid ? `${e.personName} paid back` : `Paid back ${e.personName}`,
+      sub: [pm.note, accName(pm.accountId), "Loan repayment"].filter(Boolean).join(" · "),
+      amount: pm.amount,
+      dir: theyRepaid ? "in" : "out",
+      category: theyRepaid ? "Loan repaid to you" : "Loan repayment",
+      scope: sideOf(pm.accountId ?? e.accountId),
+      link: `/money/${e.id}`,
+    });
+  }
+  return out.filter((m) => !scope || m.scope === scope);
+}
+
 // ---------------- projects (won deals) and what people owe ----------------
 
 export interface DealMoney {

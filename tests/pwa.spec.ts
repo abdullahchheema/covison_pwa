@@ -664,6 +664,12 @@ test("a personal loan to a new person creates a contact tagged Personal", async 
   expect(db.ledger.find((e) => e.personName === "Usman Cousin")!.contactId).toBe(c.id);
   const tag = db.tags.find((t) => t.name === "Personal")!;
   expect(db.contactTags.some((l) => l.contactId === c.id && l.tagId === tag.id)).toBe(true);
+  // Money lent leaves your pocket: it shows in Cash flow as money out.
+  await page.getByRole("button", { name: "Cash flow", exact: true }).click();
+  await page.getByRole("button", { name: "Personal", exact: true }).click();
+  await expect(page.getByText("Lent to Usman Cousin")).toBeVisible();
+  await expect(page.getByText(/incl\. Rs\s?15,000 lent$/)).toBeVisible();
+  await expect(page.locator(".screen.current").getByText("Lent", { exact: true })).toBeVisible(); // in "Where it went"
 });
 
 test("sheets close with a downward swipe (the + menu)", async ({ page }) => {

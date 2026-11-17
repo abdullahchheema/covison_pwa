@@ -2,6 +2,7 @@
 import { useMemo, useState } from "preact/hooks";
 import { db, type Transaction } from "../db/schema";
 import { deleteTransaction, monthTotals, restoreSnapshot } from "../db/repo";
+import { monthLoanMoves, type LoanMove } from "../db/accounts";
 import { useCountUp, useLive, useStoredState } from "../lib/hooks";
 import { money } from "../lib/format";
 import { navigate } from "../lib/router";
@@ -71,6 +72,36 @@ export function MonthGlance() {
   );
 }
 
+function LoanRow({ m, i }: { m: LoanMove; i: number }) {
+  const inc = m.dir === "in";
+  return (
+    <div class="rise" style={{ "--i": Math.min(i, 12) } as never}>
+      <Row
+        onClick={() => navigate(m.link)}
+        lead={
+          <span class="tile" style={{ background: "linear-gradient(135deg,#5b3fd6,#9b7bff)" }}>
+            <Icon name="handshake" size={16} stroke={2.2} />
+          </span>
+        }
+        title={m.label}
+        sub={m.sub}
+        trail={
+          <span class={`num t-headline ${inc ? "c-success" : ""}`} style="flex-shrink:0">
+            {inc ? "+" : "−"}
+            {money(m.amount)}
+          </span>
+        }
+        chevron={false}
+      />
+    </div>
+  );
+}
+
+type Entry = { kind: "tx"; t: Transaction } | { kind: "loan"; m: LoanMove };
+const eDate = (e: Entry) => (e.kind === "tx" ? e.t.date : e.m.date);
+const eCreated = (e: Entry) => (e.kind === "tx" ? e.t.createdAt : e.m.createdAt);
+const eSigned = (e: Entry) => (e.kind === "tx" ? (e.t.type === "income" ? e.t.amount : -e.t.amount) : e.m.dir === "in" ? e.m.amount : -e.m.amount);
+
 function TxRow({ t, i, contactName }: { t: Transaction; i: number; contactName?: string }) {
   const inc = t.type === "income";
   return (
@@ -115,23 +146,29 @@ export function CashFlowView() {
   const [ym, setYm] = useState<[number, number]>([now.getFullYear(), now.getMonth()]);
   const [scope, setScope] = useStoredState<Scope>("cashflow.scope", "");
   const data = useLive(async () => {
-    const [t, contacts] = await Promise.all([monthTotals(ym[0], ym[1], scope || undefined), db.contacts.toArray()]);
-    return { ...t, names: new Map(contacts.map((c) => [c.id, c.name])) };
+    const [t, loans, contacts] = await Promise.all([monthTotals(ym[0], ym[1], scope || undefined), monthLoanMoves(ym[0], ym[1], scope || undefined), db.contacts.toArray()]);
+    const loanIn = loans.filter((m) => m.dir === "in").reduce((s, m) => s + m.amount, 0);
+    const loanOut = loans.filter((m) => m.dir === "out").reduce((s, m) => s + m.amount, 0);
+    // Money in / out of your pocket: earnings and spending plus loans you gave,
+    // took or got back, so the month's net matches what your accounts did.
+    return { ...t, loans, loanIn, loanOut, in: t.income + loanIn, out: t.expense + loanOut, names: new Map(contacts.map((c) => [c.id, c.name])) };
   }, [ym[0], ym[1], scope]);
-  const inc = useCountUp(data?.income ?? 0, 900);
-  const exp = useCountUp(data?.expense ?? 0, 900);
+  const inc = useCountUp(data?.in ?? 0, 900);
+  const exp = useCountUp(data?.out ?? 0, 900);
 
   const byCategory = useMemo(() => {
     const m = new Map<string, number>();
     data?.txs.filter((t) => t.type === "expense").forEach((t) => m.set(t.category, (m.get(t.category) ?? 0) + t.amount));
+    data?.loans.filter((l) => l.dir === "out").forEach((l) => m.set(l.category, (m.get(l.category) ?? 0) + l.amount));
     return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
   }, [data]);
 
   const days = useMemo(() => {
-    const m = new Map<string, Transaction[]>();
-    [...(data?.txs ?? [])]
-      .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
-      .forEach((t) => m.set(t.date, [...(m.get(t.date) ?? []), t]));
+    const m = new Map<string, Entry[]>();
+    const all: Entry[] = [...(data?.txs ?? []).map((t) => ({ kind: "tx" as const, t })), ...(data?.loans ?? []).map((l) => ({ kind: "loan" as const, m: l }))];
+    all
+      .sort((a, b) => eDate(b).localeCompare(eDate(a)) || eCreated(b).localeCompare(eCreated(a)))
+      .forEach((e) => m.set(eDate(e), [...(m.get(eDate(e)) ?? []), e]));
     return [...m.entries()];
   }, [data]);
 
@@ -140,7 +177,7 @@ export function CashFlowView() {
     const n = new Date(y, m + d, 1);
     return [n.getFullYear(), n.getMonth()];
   });
-  const net = (data?.income ?? 0) - (data?.expense ?? 0);
+  const net = (data?.in ?? 0) - (data?.out ?? 0);
   let idx = 0;
 
   return (
@@ -166,20 +203,27 @@ export function CashFlowView() {
       <div class="card rise" style={{ "--i": 0 } as never}>
         <div class="row">
           <div class="col grow">
-            <span class="t-footnote c3">Earned</span>
+            <span class="t-footnote c3">Money in</span>
             <span class="t-title2 t-metric c-success">{money(inc)}</span>
           </div>
           <div class="col grow">
-            <span class="t-footnote c3">Spent</span>
+            <span class="t-footnote c3">Money out</span>
             <span class="t-title2 t-metric c-danger">{money(exp)}</span>
           </div>
         </div>
+        {data && (data.loanIn > 0 || data.loanOut > 0) && (
+          <div class="row t-caption c3 mt4">
+            <span class="grow">{data.loanIn > 0 ? `incl. ${money(data.loanIn)} from loans` : ""}</span>
+            <span class="grow">{data.loanOut > 0 ? `incl. ${data.loans.some((l) => l.dir === "out" && l.category !== "Lent") ? `${money(data.loanOut)} lent / paid back` : `${money(data.loanOut)} lent`}` : ""}</span>
+          </div>
+        )}
         <div class="bar-track mt12" style="height:8px;display:flex;background:var(--danger-soft)">
-          <div class="bar-fill won" style={{ width: `${(data?.income ?? 0) + (data?.expense ?? 0) > 0 ? ((data?.income ?? 0) / ((data?.income ?? 0) + (data?.expense ?? 0))) * 100 : 0}%`, borderRadius: "5px 0 0 5px" }} />
+          <div class="bar-fill won" style={{ width: `${(data?.in ?? 0) + (data?.out ?? 0) > 0 ? ((data?.in ?? 0) / ((data?.in ?? 0) + (data?.out ?? 0))) * 100 : 0}%`, borderRadius: "5px 0 0 5px" }} />
         </div>
         <p class={`t-subhead mt8 num ${net >= 0 ? "c-success" : "c-danger"}`} style="font-weight:700">
           {net >= 0 ? "Saved " : "Overspent "}
           {money(Math.abs(net))}
+          {isCurrent ? " this month" : " that month"}
         </p>
         <div class="row gap8 mt12">
           <button class="btn sm press grow" style="background:var(--success-soft);color:var(--success)" onClick={() => openTransactionForm(undefined, { type: "income", scope: scope || "business" })}>
@@ -205,13 +249,13 @@ export function CashFlowView() {
       <section class="section">
         <div class="section-head">
           <h2>Entries</h2>
-          <span class="t-footnote c3">{data?.txs.length ?? 0}</span>
+          <span class="t-footnote c3">{(data?.txs.length ?? 0) + (data?.loans.length ?? 0)}</span>
         </div>
         {data && days.length === 0 ? (
           <Empty icon="wallet" title="Nothing this month" text="Add what you earn and spend, personal and business. Deal payments show up here automatically." />
         ) : (
           days.map(([day, items]) => {
-            const dayNet = items.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0);
+            const dayNet = items.reduce((s, e) => s + eSigned(e), 0);
             return (
               <div key={day} class="mt12">
                 <div class="row between" style="padding:0 16px 6px">
@@ -222,16 +266,20 @@ export function CashFlowView() {
                   </span>
                 </div>
                 <div class="group">
-                  {items.map((t) => (
-                    <TxRow key={t.id} t={t} i={idx++} contactName={t.contactId ? data!.names.get(t.contactId) : undefined} />
-                  ))}
+                  {items.map((e) =>
+                    e.kind === "tx" ? (
+                      <TxRow key={e.t.id} t={e.t} i={idx++} contactName={e.t.contactId ? data!.names.get(e.t.contactId) : undefined} />
+                    ) : (
+                      <LoanRow key={e.m.id} m={e.m} i={idx++} />
+                    ),
+                  )}
                 </div>
               </div>
             );
           })
         )}
       </section>
-      <p class="t-footnote c3" style="text-align:center;padding:16px 8px 0">Personal loans are tracked under Owed and aren't counted as income or spending.</p>
+      <p class="t-footnote c3" style="text-align:center;padding:16px 8px 0">Money you lend, borrow or get back shows here too. Tap a loan to see who still owes what.</p>
     </>
   );
 }
