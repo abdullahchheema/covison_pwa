@@ -284,6 +284,7 @@ export async function monthLoanMoves(year: number, month: number, scope?: "busin
   const out: LoanMove[] = [];
   const loans = new Map(ledger.filter((e) => e.kind === "loan").map((e) => [e.id, e]));
   for (const e of loans.values()) {
+    if (!e.accountId) continue; // "paid for" entries: no money moved
     if (e.date < from || e.date > to) continue;
     const lent = e.direction === "in";
     out.push({
@@ -301,7 +302,7 @@ export async function monthLoanMoves(year: number, month: number, scope?: "busin
   }
   for (const pm of payments) {
     const e = loans.get(pm.entryId);
-    if (!e || pm.date < from || pm.date > to) continue;
+    if (!e || !pm.accountId || pm.date < from || pm.date > to) continue;
     const theyRepaid = e.direction === "in";
     out.push({
       id: pm.id,
@@ -312,7 +313,7 @@ export async function monthLoanMoves(year: number, month: number, scope?: "busin
       amount: pm.amount,
       dir: theyRepaid ? "in" : "out",
       category: theyRepaid ? "Loan repaid to you" : "Loan repayment",
-      scope: sideOf(pm.accountId ?? e.accountId),
+      scope: sideOf(pm.accountId),
       link: `/money/${e.id}`,
     });
   }

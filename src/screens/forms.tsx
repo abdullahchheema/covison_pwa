@@ -844,6 +844,10 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
   const set = (k: keyof typeof f) => (v: string) => setF((p) => ({ ...p, [k]: v }));
   const contacts = useLive(() => db.contacts.orderBy("name").toArray(), []);
   const [accountId, setAccountId] = useDefaultAccount(e.accountId);
+  // "cash": money actually left / entered one of your accounts.
+  // "paid": a bill or purchase you already booked as an expense (or they did);
+  // only the split is tracked, so no account balance changes a second time.
+  const [how, setHow] = useState<"cash" | "paid">(existing && !existing.accountId ? "paid" : "cash");
 
   bind.current = async () => {
     const amount = numOrUndef(f.amount);
@@ -869,10 +873,10 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
       date: f.date || todayYmd(),
       dueDate: f.dueDate || undefined,
       note: optText(f.note, MAX_LONG),
-      accountId: f.kind === "loan" && accountId ? accountId : undefined,
+      accountId: f.kind === "loan" && how === "cash" && accountId ? accountId : undefined,
       settledAt: existing?.settledAt,
     });
-    if (f.kind === "loan") rememberAccount(accountId);
+    if (f.kind === "loan" && how === "cash") rememberAccount(accountId);
     // Everyone you lend to / borrow from becomes a contact (tagged Personal for loans).
     if (!f.contactId) {
       const made = await linkLedgerPeople();
@@ -904,6 +908,34 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
           ? "Money lent or borrowed, even if it came from a business account. Counts under Personal."
           : "A client or supplier owes for work or goods sold on credit. Counts under Business."}
       </p>
+      {f.kind === "loan" && (
+        <>
+          <Segmented
+            value={how}
+            onChange={(v) => setHow(v as "cash" | "paid")}
+            options={
+              f.direction === "in"
+                ? [
+                    { value: "cash", label: "I gave them money" },
+                    { value: "paid", label: "I paid for them" },
+                  ]
+                : [
+                    { value: "cash", label: "They gave me money" },
+                    { value: "paid", label: "They paid for me" },
+                  ]
+            }
+          />
+          <p class="t-footnote c3" style="padding:0 4px;margin-top:-10px">
+            {how === "paid"
+              ? f.direction === "in"
+                ? "For a bill you already paid in full (it's already in your expenses). Only their share is noted as owed; your account balance doesn't change again."
+                : "They paid the bill, so no money entered your account. Your share is noted as owed; your balance doesn't change until you pay them back."
+              : f.direction === "in"
+                ? "Cash or a transfer left your account to them."
+                : "Cash or a transfer arrived in your account from them."}
+          </p>
+        </>
+      )}
       <Group label="Who" footer="Pick a contact, or type a new name and number; they're added to Contacts automatically.">
         <SelectField label="Contact" value={f.contactId} onChange={set("contactId")} placeholder="Not a contact" options={(contacts ?? []).map((x) => ({ value: x.id, label: x.name }))} />
         {!f.contactId && <TextField label="Name" value={f.personName} onInput={set("personName")} placeholder="Required" />}
@@ -913,7 +945,7 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
         <TextField label="Amount (Rs)" value={f.amount} onInput={set("amount")} inputMode="decimal" placeholder="0" autoFocus={!existing && !defaults.amount} />
         <TextField label="Date" value={f.date} onInput={set("date")} type="date" />
         <TextField label="Due by" value={f.dueDate} onInput={set("dueDate")} type="date" />
-        {f.kind === "loan" && <AccountSelect value={accountId} onChange={setAccountId} label={f.direction === "in" ? "Lent from" : "Received into"} optional />}
+        {f.kind === "loan" && how === "cash" && <AccountSelect value={accountId} onChange={setAccountId} label={f.direction === "in" ? "Lent from" : "Received into"} optional />}
       </Group>
       <Group>
         <TextArea label="Note" value={f.note} onInput={set("note")} placeholder="What was it for?" />
