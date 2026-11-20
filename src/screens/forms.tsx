@@ -22,6 +22,7 @@ import {
   saveTag,
   saveTask,
   saveTodo,
+  type EntryWithBalance,
 } from "../db/repo";
 import { useLive } from "../lib/hooks";
 import {
@@ -885,6 +886,7 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
     toast(existing ? "Entry updated" : f.direction === "in" ? "Added to money owed to you" : "Added to money you owe", { icon: "wallet" });
   };
 
+  const loan = f.kind === "loan";
   return (
     <div class="form">
       <Segmented
@@ -895,60 +897,31 @@ function LedgerForm({ bind, existing, defaults }: { bind: Binding; existing?: Le
           { value: "out", label: "I owe them" },
         ]}
       />
-      <Segmented
-        value={f.kind}
-        onChange={set("kind")}
-        options={[
-          { value: "loan", label: "Loan (personal)" },
-          { value: "credit", label: "Client credit" },
-        ]}
-      />
-      <p class="t-footnote c3" style="padding:0 4px;margin-top:-10px">
-        {f.kind === "loan"
-          ? "Money lent or borrowed, even if it came from a business account. Counts under Personal."
-          : "A client or supplier owes for work or goods sold on credit. Counts under Business."}
-      </p>
-      {f.kind === "loan" && (
-        <>
-          <Segmented
-            value={how}
-            onChange={(v) => setHow(v as "cash" | "paid")}
-            options={
-              f.direction === "in"
-                ? [
-                    { value: "cash", label: "I gave them money" },
-                    { value: "paid", label: "I paid for them" },
-                  ]
-                : [
-                    { value: "cash", label: "They gave me money" },
-                    { value: "paid", label: "They paid for me" },
-                  ]
-            }
-          />
-          <p class="t-footnote c3" style="padding:0 4px;margin-top:-10px">
-            {how === "paid"
-              ? f.direction === "in"
-                ? "For a bill you already paid in full (it's already in your expenses). Only their share is noted as owed; your account balance doesn't change again."
-                : "They paid the bill, so no money entered your account. Your share is noted as owed; your balance doesn't change until you pay them back."
-              : f.direction === "in"
-                ? "Cash or a transfer left your account to them."
-                : "Cash or a transfer arrived in your account from them."}
-          </p>
-        </>
-      )}
-      <Group label="Who" footer="Pick a contact, or type a new name and number; they're added to Contacts automatically.">
+      <Group label="Who">
         <SelectField label="Contact" value={f.contactId} onChange={set("contactId")} placeholder="Not a contact" options={(contacts ?? []).map((x) => ({ value: x.id, label: x.name }))} />
         {!f.contactId && <TextField label="Name" value={f.personName} onInput={set("personName")} placeholder="Required" />}
-        {!f.contactId && <TextField label="Phone" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" placeholder="For WhatsApp reminders" />}
+        {!f.contactId && <TextField label="Phone" value={f.phone} onInput={set("phone")} type="tel" inputMode="tel" placeholder="Optional" />}
       </Group>
-      <Group label="Amount">
+      <Group
+        label="Amount"
+        footer={
+          loan
+            ? how === "paid"
+              ? "Just noted as owed. Your account balance doesn't change: use this for a bill you already paid, or an old debt."
+              : f.direction === "in"
+                ? "This amount leaves the account below."
+                : "This amount arrives in the account below."
+            : "A client or supplier owes for work or goods sold on credit."
+        }
+      >
         <TextField label="Amount (Rs)" value={f.amount} onInput={set("amount")} inputMode="decimal" placeholder="0" autoFocus={!existing && !defaults.amount} />
+        {loan && <SwitchField label="Already happened" checked={how === "paid"} onChange={(v) => setHow(v ? "paid" : "cash")} />}
+        {loan && how === "cash" && <AccountSelect value={accountId} onChange={setAccountId} label={f.direction === "in" ? "Paid from" : "Received into"} optional />}
         <TextField label="Date" value={f.date} onInput={set("date")} type="date" />
         <TextField label="Due by" value={f.dueDate} onInput={set("dueDate")} type="date" />
-        {f.kind === "loan" && how === "cash" && <AccountSelect value={accountId} onChange={setAccountId} label={f.direction === "in" ? "Lent from" : "Received into"} optional />}
       </Group>
       <Group>
-        <TextArea label="Note" value={f.note} onInput={set("note")} placeholder="What was it for?" />
+        <TextArea label="Note" value={f.note} onInput={set("note")} placeholder="What was it for? (optional)" />
       </Group>
     </div>
   );
@@ -978,6 +951,45 @@ function PaymentForm({ bind, entry, remaining }: { bind: Binding; entry: LedgerE
         <TextField label="Amount (Rs)" value={amount} onInput={setAmount} inputMode="decimal" autoFocus />
         <TextField label="Date" value={date} onInput={setDate} type="date" />
         <AccountSelect value={accountId} onChange={setAccountId} label={entry.direction === "in" ? "Into account" : "From account"} optional />
+        <TextField label="Note" value={note} onInput={setNote} placeholder="Optional" />
+      </Group>
+    </div>
+  );
+}
+
+/** One payment against everything a person owes (or that you owe them): applied to the oldest entries first. */
+export function openPersonPaymentForm(rows: EntryWithBalance[], total: number) {
+  const inbound = rows[0]?.entry.direction === "in";
+  openForm(inbound ? "Payment received" : "Payment made", (bind) => <PersonPaymentForm bind={bind} rows={rows} total={total} />, "Save");
+}
+
+function PersonPaymentForm({ bind, rows, total }: { bind: Binding; rows: EntryWithBalance[]; total: number }) {
+  const [amount, setAmount] = useState(String(total));
+  const [date, setDate] = useState(todayYmd());
+  const [note, setNote] = useState("");
+  const [accountId, setAccountId] = useDefaultAccount();
+  const inbound = rows[0]?.entry.direction === "in";
+  bind.current = async () => {
+    const a = numOrUndef(amount);
+    if (!a || a <= 0) return fail("Enter an amount");
+    if (a > total + 0.001) return fail(`That's more than the ${money(total)} in total`);
+    rememberAccount(accountId);
+    let left = a;
+    const oldestFirst = [...rows].sort((x, y) => x.entry.date.localeCompare(y.entry.date) || x.entry.createdAt.localeCompare(y.entry.createdAt));
+    for (const r of oldestFirst) {
+      if (left <= 0.004) break;
+      const part = Math.round(Math.min(left, r.balance) * 100) / 100;
+      await addPayment(r.entry.id, part, date || todayYmd(), optText(note, 500), undefined, accountId || undefined);
+      left = Math.round((left - part) * 100) / 100;
+    }
+    toast(a >= total ? "All settled 🎉" : "Payment recorded", { icon: "checkCircle" });
+  };
+  return (
+    <div class="form">
+      <Group footer={`In total: ${money(total)}. A part-payment goes to the oldest entry first.`}>
+        <TextField label="Amount (Rs)" value={amount} onInput={setAmount} inputMode="decimal" autoFocus />
+        <TextField label="Date" value={date} onInput={setDate} type="date" />
+        <AccountSelect value={accountId} onChange={setAccountId} label={inbound ? "Into account" : "From account"} optional />
         <TextField label="Note" value={note} onInput={setNote} placeholder="Optional" />
       </Group>
     </div>

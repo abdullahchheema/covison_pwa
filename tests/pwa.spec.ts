@@ -865,7 +865,7 @@ test("pipeline card shows the company on top and the person at the bottom", asyn
   await expect(card.locator(".row.gap8.mt8")).not.toContainText("Eman Furniture");
 });
 
-test("split bills: 'I paid for them' / 'They paid for me' don't move account balances a second time", async ({ page }) => {
+test("split bills: an already-happened loan or old debt doesn't move account balances a second time", async ({ page }) => {
   await page.goto("./#/settings");
   await page.getByText("Erase all data", { exact: true }).click();
   await page.getByRole("dialog").last().getByRole("button", { name: "Erase everything", exact: true }).click();
@@ -879,21 +879,21 @@ test("split bills: 'I paid for them' / 'They paid for me' don't move account bal
   await s.getByRole("button", { name: "Food", exact: true }).click();
   await s.getByRole("button", { name: "Save", exact: true }).click();
   await page.waitForTimeout(500);
-  const addLoan = async (name: string, amount: string, how: string) => {
+  const addLoan = async (name: string, amount: string, how: string, iOwe = false) => {
     await page.getByRole("button", { name: "Owed", exact: true }).click();
     await page.getByRole("button", { name: "Loan", exact: true }).click();
     const d = page.getByRole("dialog").last();
-    if (how === "They paid for me") await d.getByRole("button", { name: "I owe them", exact: true }).click();
-    await d.getByRole("button", { name: how, exact: true }).click();
+    if (iOwe) await d.getByRole("button", { name: "I owe them", exact: true }).click();
+    if (how === "Already happened") await d.getByLabel("Already happened").check();
     await d.getByLabel("Name", { exact: true }).fill(name);
     await d.getByLabel("Amount (Rs)").fill(amount);
     await d.getByRole("button", { name: "Save", exact: true }).click();
     await page.waitForTimeout(600);
   };
   // Friend owes half of it: nothing should leave the account again
-  await addLoan("Ali Friend", "1000", "I paid for them");
+  await addLoan("Ali Friend", "1000", "Already happened");
   // Another friend paid a bill and I owe my share: nothing should enter my account
-  await addLoan("Sara Friend", "500", "They paid for me");
+  await addLoan("Sara Friend", "500", "Already happened", true);
   const db = (await dumpDb(page)) as Record<string, Record<string, unknown>[]>;
   expect(db.ledger.length).toBe(2);
   expect(db.ledger.every((e) => !e.accountId)).toBe(true);
@@ -918,4 +918,45 @@ test("split bills: 'I paid for them' / 'They paid for me' don't move account bal
   await page.goto("./#/money");
   await page.getByRole("button", { name: "Accounts", exact: true }).click();
   await expect(page.locator(".screen.current")).toContainText(/Rs\s?4,000/);
+});
+
+test("owed: one person is one line with the total; their page has the history and reminds the total", async ({ page }) => {
+  await addAccount(page, "NayaPay", "Wallet", "Personal", "50000");
+  const addLoan = async (amount: string, note: string) => {
+    await page.goto("./#/money");
+    await page.getByRole("button", { name: "Owed", exact: true }).click();
+    await page.getByRole("button", { name: "Loan", exact: true }).click();
+    const d = page.getByRole("dialog").last();
+    await d.getByLabel("Name", { exact: true }).fill("Shahzaib Imran");
+    await d.getByLabel("Phone").fill("0300 1234567");
+    await d.getByLabel("Amount (Rs)").fill(amount);
+    await d.getByLabel("Note").fill(note);
+    await d.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForTimeout(700);
+  };
+  await addLoan("3800", "dinner");
+  await addLoan("300", "fuel");
+  await page.goto("./#/money");
+  await page.getByRole("button", { name: "Owed", exact: true }).click();
+  await page.locator(".screen.current .money-card.personal").click();
+  const rows = page.locator(".screen.current .group .lr-title", { hasText: "Shahzaib Imran" });
+  await expect(rows).toHaveCount(1);
+  const line = page.locator(".screen.current .group").filter({ hasText: "Shahzaib Imran" });
+  await expect(line).toContainText(/2 loans/);
+  await expect(line).toContainText(/Rs\s?4,100/);
+  await rows.first().click();
+  // person page: total, history, reminder with the total
+  await expect(page.locator(".screen.current .h-value")).toHaveText(/Rs\s?4,100/);
+  await expect(page.locator(".screen.current")).toContainText("Lent Rs 3,800");
+  await expect(page.locator(".screen.current")).toContainText("Lent Rs 300");
+  const href = decodeURIComponent((await page.locator(".screen.current a.btn.wa").getAttribute("href")) ?? "");
+  expect(href).toContain("4,100");
+  expect(href).toContain("3,800");
+  // a part payment goes to the oldest entry first
+  await page.getByRole("button", { name: "Payment received" }).click();
+  const s = page.getByRole("dialog").last();
+  await s.getByLabel("Amount (Rs)").fill("3800");
+  await s.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.locator(".screen.current .h-value")).toHaveText(/Rs\s?300/, { timeout: 4000 });
+  await expect(page.locator(".screen.current")).toContainText("Paid back Rs 3,800");
 });

@@ -11,7 +11,7 @@ import { telHref } from "../lib/sanitize";
 import { Icon } from "../ui/icons";
 import { Avatar, Badge, Empty, Group, Row, Screen, Segmented, SkeletonList, SwipeRow } from "../ui/kit";
 import { actionSheet, confirmSheet, toast, undoToast } from "../ui/overlay";
-import { openLedgerForm, openPaymentForm, openTransactionForm } from "./forms";
+import { openLedgerForm, openPaymentForm, openPersonPaymentForm, openTransactionForm } from "./forms";
 import { confirmDelete } from "./shared";
 import { CashFlowView } from "./CashFlow";
 import { AccountsView } from "./Accounts";
@@ -23,6 +23,22 @@ type View = "in" | "out" | "settled";
 async function loadLedger() {
   const [entries, payments] = await Promise.all([db.ledger.orderBy("date").reverse().toArray(), db.payments.toArray()]);
   return entries.map((e) => withBalance(e, payments));
+}
+
+/** Entries of the same person are one line: by contact when linked, otherwise by name. */
+export function personKey(e: LedgerEntry): string {
+  return e.contactId ? `c:${e.contactId}` : `n:${e.personName.trim().toLowerCase()}`;
+}
+
+/** WhatsApp reminder for everything a person owes in total (with a short breakdown when there are several entries). */
+export function personReminderText(name: string, rows: EntryWithBalance[]): string {
+  const first = name.split(" ")[0];
+  const total = rows.reduce((s, r) => s + r.balance, 0);
+  const cur = rows[0]?.entry.currency;
+  const sorted = [...rows].sort((a, b) => a.entry.date.localeCompare(b.entry.date));
+  const lines = sorted.length > 1 ? `\n${sorted.map((r) => `• ${shortDate(r.entry.date)}: ${money(r.balance, r.entry.currency)}${r.entry.note ? ` (${r.entry.note})` : ""}`).join("\n")}\n` : " ";
+  if (rows[0]?.entry.direction === "in") return `Assalam o Alaikum ${first}, a gentle reminder about the total pending amount of ${money(total, cur)}.${lines}Please let me know when it's convenient. Thank you!`;
+  return `Assalam o Alaikum ${first}, about the ${money(total, cur)} I owe you: `;
 }
 
 /** Friendly WhatsApp reminder, in the user's voice. */
@@ -84,6 +100,59 @@ export function MoneySummary({ compact }: { compact?: boolean }) {
         </span>
       </button>
     </div>
+  );
+}
+
+interface PersonGroup {
+  key: string;
+  name: string;
+  phone?: string;
+  rows: EntryWithBalance[];
+  total: number;
+  overdueSince?: string;
+  latest: string;
+  currency: string;
+}
+
+function groupByPerson(rows: EntryWithBalance[]): PersonGroup[] {
+  const m = new Map<string, PersonGroup>();
+  for (const x of rows) {
+    const k = personKey(x.entry);
+    const g = m.get(k) ?? { key: k, name: x.entry.personName, phone: x.entry.phone, rows: [], total: 0, latest: "", currency: x.entry.currency };
+    g.rows.push(x);
+    g.total = Math.round((g.total + x.balance) * 100) / 100;
+    if (!g.phone && x.entry.phone) g.phone = x.entry.phone;
+    if (x.entry.date > g.latest) g.latest = x.entry.date;
+    if (x.overdue && x.entry.dueDate && (!g.overdueSince || x.entry.dueDate < g.overdueSince)) g.overdueSince = x.entry.dueDate;
+    m.set(k, g);
+  }
+  return [...m.values()].sort((a, b) => b.total - a.total);
+}
+
+function PersonRow({ g, i }: { g: PersonGroup; i: number }) {
+  const inbound = g.rows[0].entry.direction === "in";
+  const n = g.rows.length;
+  const kind = g.rows[0].entry.kind === "loan" ? "loan" : "credit";
+  const wa = waHref(g.phone, personReminderText(g.name, g.rows));
+  return (
+    <SwipeRow
+      i={i}
+      actions={wa && inbound ? [{ label: "WhatsApp", icon: "whatsapp" as const, tone: "success" as const, run: () => void openWhatsApp(g.phone, personReminderText(g.name, g.rows)) }] : []}
+    >
+      <Row
+        onClick={() => navigate(`/people/${encodeURIComponent(g.key)}`)}
+        lead={<Avatar name={g.name} />}
+        title={g.name}
+        sub={
+          <span class="row gap4" style="gap:6px">
+            <span>{n > 1 ? `${n} ${kind === "loan" ? "loans" : "entries"}` : kind === "loan" ? "Loan" : "Credit"}</span>
+            {g.overdueSince ? <span class="c-danger">· overdue since {shortDate(g.overdueSince)}</span> : <span>· {n > 1 ? "latest " : ""}{shortDate(g.latest)}</span>}
+          </span>
+        }
+        trail={<span class={`num t-headline ${inbound ? "c-success" : "c-danger"}`} style="flex-shrink:0">{money(g.total, g.currency)}</span>}
+        chevron={false}
+      />
+    </SwipeRow>
   );
 }
 
@@ -202,6 +271,7 @@ function OwedView() {
       return view === "personal" ? x.entry.kind === "loan" : x.entry.kind === "credit";
     });
   }, [all, view]);
+  const people = useMemo(() => (view === "settled" || !ledgerRows ? [] : groupByPerson(ledgerRows)), [ledgerRows, view]);
   const projectRows = view === "business" ? (projects ?? []).filter((p) => p.due > 0 || p.agreed === 0) : [];
   const total = view === "business" ? summary?.businessTotal : view === "personal" ? summary?.personalTotal : view === "iowe" ? summary?.iOweTotal : undefined;
   const empty = ledgerRows !== undefined && ledgerRows.length === 0 && projectRows.length === 0;
@@ -262,12 +332,156 @@ function OwedView() {
               chevron={false}
             />
           ))}
-          {ledgerRows.map((x) => (
-            <EntryRow key={x.entry.id} x={x} i={i++} />
-          ))}
+          {view === "settled"
+            ? ledgerRows.map((x) => <EntryRow key={x.entry.id} x={x} i={i++} />)
+            : people.map((g) => <PersonRow key={g.key} g={g} i={i++} />)}
         </div>
       )}
     </>
+  );
+}
+
+/** Everything with one person: the total, a single reminder, and the history. */
+export function PersonDetail({ pkey }: { pkey: string }) {
+  const data = useLive(async () => {
+    const [entries, payments] = await Promise.all([db.ledger.toArray(), db.payments.toArray()]);
+    const mine = entries.filter((e) => personKey(e) === pkey).map((e) => withBalance(e, payments));
+    return mine;
+  }, [pkey]);
+
+  if (data === undefined) return <Screen title="" backLabel="Money" backTo="/money" large={false}><div /></Screen>;
+  if (data.length === 0)
+    return (
+      <Screen title="Person" backLabel="Money" backTo="/money" large={false}>
+        <Empty icon="wallet" title="Nothing here" text="No money entries with this person." />
+      </Screen>
+    );
+  const first = data[0].entry;
+  const name = data.find((x) => x.entry.contactId)?.entry.personName ?? first.personName;
+  const phone = data.map((x) => x.entry.phone).find(Boolean);
+  const contactId = data.map((x) => x.entry.contactId).find(Boolean);
+  const open = (d: "in" | "out") => data.filter((x) => x.entry.direction === d && !x.entry.settledAt && x.balance > 0);
+  const owedToMe = open("in");
+  const iOwe = open("out");
+  const sum = (l: EntryWithBalance[]) => Math.round(l.reduce((s, x) => s + x.balance, 0) * 100) / 100;
+  const inTotal = sum(owedToMe);
+  const outTotal = sum(iOwe);
+  const main = inTotal > 0 || outTotal === 0 ? owedToMe : iOwe;
+  const inbound = main === owedToMe;
+  const total = inbound ? inTotal : outTotal;
+  const fn = name.split(" ")[0];
+  const given = data.filter((x) => x.entry.direction === (inbound ? "in" : "out")).reduce((s, x) => s + x.entry.amount, 0);
+  const paidBack = data.filter((x) => x.entry.direction === (inbound ? "in" : "out")).reduce((s, x) => s + x.paid, 0);
+  const text = personReminderText(name, main);
+  const wa = main.length ? waHref(phone, text) : undefined;
+  const settledAll = main.length === 0;
+
+  type Item = { id: string; date: string; at: string; node: "entry" | "payment"; x: EntryWithBalance; p?: (typeof data)[number]["payments"][number] };
+  const items: Item[] = [];
+  for (const x of data) {
+    items.push({ id: x.entry.id, date: x.entry.date, at: x.entry.createdAt, node: "entry", x });
+    for (const p of x.payments) items.push({ id: p.id, date: p.date, at: p.createdAt, node: "payment", x, p });
+  }
+  items.sort((a, b) => b.date.localeCompare(a.date) || b.at.localeCompare(a.at));
+
+  return (
+    <Screen
+      title={name}
+      backLabel="Money"
+      backTo="/money"
+      large={false}
+      right={
+        <button
+          class="nav-btn"
+          onClick={() =>
+            actionSheet([
+              { label: `Loan given to ${fn}`, icon: "arrowUpRight", run: () => openLedgerForm(undefined, { contactId, personName: name, phone, direction: "in", kind: "loan" }) },
+              { label: `Loan taken from ${fn}`, icon: "arrowDownLeft", run: () => openLedgerForm(undefined, { contactId, personName: name, phone, direction: "out", kind: "loan" }) },
+              { label: `${fn} owes for work / goods (credit)`, icon: "briefcase", run: () => openLedgerForm(undefined, { contactId, personName: name, phone, direction: "in", kind: "credit" }) },
+            ])
+          }
+        >
+          Add
+        </button>
+      }
+    >
+      <div class="content">
+        <div class={`hero ${inbound ? "hero-in" : "hero-out"} rise`} style={{ "--i": 0, paddingBottom: "20px" } as never}>
+          <div class="row between">
+            <span class="h-label">{settledAll ? "All settled" : inbound ? `${fn} owes you` : `You owe ${fn}`}</span>
+            <Badge tone="neutral">{main.length > 1 ? `${main.length} entries` : main.length === 1 ? (main[0].entry.kind === "loan" ? "Personal loan" : "Credit") : "Settled"}</Badge>
+          </div>
+          <div class="h-value t-metric selectable">{money(total, first.currency)}</div>
+          <div class="h-sub">
+            {given > 0 ? `of ${money(given, first.currency)} in total · ${money(paidBack, first.currency)} paid back` : ""}
+            {inbound && outTotal > 0 ? ` · you also owe ${fn} ${money(outTotal, first.currency)}` : ""}
+          </div>
+          <div class="mt16" style="height:6px;border-radius:3px;background:rgb(255 255 255 / .25);overflow:hidden">
+            <div style={{ height: "100%", width: `${Math.max(3, given > 0 ? Math.min(1, paidBack / given) * 100 : 0)}%`, background: "#fff", borderRadius: "3px", transformOrigin: "left", animation: "grow-x 900ms var(--ease-out) both" }} />
+          </div>
+        </div>
+
+        {!settledAll && (
+          <div class="row gap8 mt12">
+            <button class="btn primary block press" style="flex:1.4" onClick={() => openPersonPaymentForm(main, total)}>
+              <Icon name="plus" size={20} />
+              {inbound ? "Payment received" : "Payment made"}
+            </button>
+            {wa && (
+              <a class="btn wa press" {...waLinkProps(phone, text)} aria-label="WhatsApp">
+                <Icon name="whatsapp" size={20} />
+                {inbound ? "Remind" : "Chat"}
+              </a>
+            )}
+          </div>
+        )}
+
+        <Group class="section">
+          {contactId ? <Row title={name} sub="contact" lead={<Avatar name={name} />} onClick={() => navigate(`/contacts/${contactId}`)} /> : <Row title={name} sub="person" lead={<Avatar name={name} />} chevron={false} />}
+          {phone && <Row title={<span class="selectable">{phone}</span>} sub="phone" href={telHref(phone)} chevron={false} />}
+        </Group>
+
+        <section class="section">
+          <div class="section-head">
+            <h2>History</h2>
+            <span class="t-footnote c3">{data.length} {data.length === 1 ? "entry" : "entries"}</span>
+          </div>
+          <div class="group">
+            {items.map((it, i) =>
+              it.node === "entry" ? (
+                <Row
+                  key={it.id}
+                  i={i}
+                  onClick={() => navigate(`/money/${it.x.entry.id}`)}
+                  lead={
+                    <span class="tile" style={{ background: it.x.entry.direction === "in" ? "linear-gradient(135deg,#5b3fd6,#9b7bff)" : "linear-gradient(135deg,#d13a46,#ff737d)" }}>
+                      <Icon name={it.x.entry.direction === "in" ? "arrowUpRight" : "arrowDownLeft"} size={16} stroke={2.4} />
+                    </span>
+                  }
+                  title={`${it.x.entry.kind === "credit" ? (it.x.entry.direction === "in" ? "Credit" : "Bought on credit") : it.x.entry.direction === "in" ? "Lent" : "Borrowed"} ${money(it.x.entry.amount, it.x.entry.currency)}`}
+                  sub={[shortDate(it.x.entry.date), it.x.entry.note, it.x.entry.settledAt || it.x.balance <= 0 ? "settled" : it.x.paid > 0 ? `${money(it.x.balance, it.x.entry.currency)} left` : undefined].filter(Boolean).join(" · ")}
+                  chevron={false}
+                />
+              ) : (
+                <Row
+                  key={it.id}
+                  i={i}
+                  onClick={() => navigate(`/money/${it.x.entry.id}`)}
+                  lead={
+                    <span class="tile green">
+                      <Icon name="check" size={16} />
+                    </span>
+                  }
+                  title={`${it.x.entry.direction === "in" ? "Paid back" : "You paid"} ${money(it.p!.amount, it.x.entry.currency)}`}
+                  sub={[shortDate(it.p!.date), it.p!.note].filter(Boolean).join(" · ")}
+                  chevron={false}
+                />
+              ),
+            )}
+          </div>
+        </section>
+      </div>
+    </Screen>
   );
 }
 

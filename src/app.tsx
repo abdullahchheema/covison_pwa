@@ -16,7 +16,7 @@ import { TagsScreen } from "./screens/Tags";
 import { LeadTypesScreen } from "./screens/LeadTypes";
 import { SearchScreen } from "./screens/Search";
 import { SettingsScreen } from "./screens/Settings";
-import { LedgerDetail, MoneyScreen } from "./screens/Ledger";
+import { LedgerDetail, MoneyScreen, PersonDetail } from "./screens/Ledger";
 import { AccountDetail } from "./screens/Accounts";
 import { StagesScreen } from "./screens/Stages";
 import { NotFound } from "./screens/NotFound";
@@ -39,6 +39,7 @@ const ROUTES: [string, (p: Record<string, string>) => JSX.Element][] = [
   ["/projects/:id", (p) => <ProjectBoard id={p.id} />],
   ["/money", () => <MoneyScreen />],
   ["/money/:id", (p) => <LedgerDetail id={p.id} />],
+  ["/people/:key", (p) => <PersonDetail pkey={p.key} />],
   ["/accounts/:id", (p) => <AccountDetail id={p.id} />],
   ["/more", () => <More />],
   ["/reports", () => <Reports />],
